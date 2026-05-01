@@ -17,25 +17,22 @@
 
 ## Quick Deploy (any machine)
 
-### 1. Create workspace directory
+### 1. Clone the fork
 
 ```bash
-# Choose a location (any drive/path works)
-mkdir -p /c/dev/hermes
-cd /c/dev/hermes
-git init
+# Clone hermes-agent fork
+git clone https://github.com/jsboige/hermes-agent.git C:\dev\hermes-agent
+cd C:\dev\hermes-agent
+
+# Add upstream for future syncs
+git remote add upstream https://github.com/NousResearch/hermes-agent.git
 ```
 
-### 2. Copy templates
+The `.claude/` directory (agents, rules, commands, CLAUDE.md) is already in the repo.
 
-```bash
-# From roo-extensions repo
-cp -r docs/hermes/templates/.claude .claude
-```
+### 2. Verify MCP access
 
-### 3. Verify MCP access
-
-Open Claude Code in the hermes directory and verify:
+Open Claude Code in the `C:\dev\hermes-agent\` directory and verify:
 
 ```
 roosync_dashboard(action: "list")
