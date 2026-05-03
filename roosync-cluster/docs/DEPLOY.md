@@ -1,103 +1,220 @@
 # Hermes Deployment Guide
 
 **Issue:** #1862
-**Version:** 1.0.0
-**Date:** 2026-05-01
+**Version:** 2.0.0
+**Date:** 2026-05-02
 
 ---
 
 ## Prerequisites
 
-1. Target machine has Claude Code CLI installed
-2. MCP roo-state-manager is configured in `~/.claude.json` (global config)
-3. Google Drive shared state is accessible (`ROOSYNC_SHARED_PATH` env var set)
-4. Git is available (for workspace versioning)
+1. Docker + Docker Compose available (WSL2 on Windows, native on Linux)
+2. z.ai API key for GLM models (dedicated Hermes key, not shared with nanoclaw)
+3. MCP access via `https://mcp-tools.myia.io/roo-state-manager/mcp` (Bearer token required)
 
 ---
 
-## Quick Deploy (any machine)
+## Quick Deploy (Docker)
 
 ### 1. Clone the fork
 
 ```bash
-# Clone hermes-agent fork
-git clone https://github.com/jsboige/hermes-agent.git C:\dev\hermes-agent
-cd C:\dev\hermes-agent
-
-# Add upstream for future syncs
+git clone https://github.com/jsboige/hermes-agent.git /mnt/c/dev/hermes-agent
+cd /mnt/c/dev/hermes-agent
 git remote add upstream https://github.com/NousResearch/hermes-agent.git
 ```
 
-The `.claude/` directory (agents, rules, commands, CLAUDE.md) is already in the repo.
+### 2. Create config directory
 
-### 2. Verify MCP access
-
-Open Claude Code in the `C:\dev\hermes-agent\` directory and verify:
-
-```
-roosync_dashboard(action: "list")
+```bash
+mkdir -p ~/.hermes
 ```
 
-Should return ~30 dashboards including `global`, workspace, and machine types.
-
-### 4. Test cross-workspace read
+### 3. Write `~/.hermes/.env`
 
 ```
-roosync_dashboard(action: "read", type: "global")
-roosync_dashboard(action: "read", type: "workspace", workspace: "roo-extensions", section: "status")
+GLM_API_KEY=<your-zai-key>
+GLM_BASE_URL=https://api.z.ai/api/coding/paas/v4
 ```
 
-### 5. Post first message
+**Important:** Use the **coding endpoint** (`/api/coding/paas/v4`), not the standard one (`/api/paas/v4`).
 
+### 4. Write `~/.hermes/config.yaml`
+
+Start minimal. Hermes will expand it on first run with all defaults:
+
+```yaml
+model:
+  default: glm-5-turbo
+  provider: zai
+compression:
+  enabled: true
+  auxiliary_model: glm-4.5-air
+mcp_servers:
+  roo-state-manager:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - https://mcp-tools.myia.io/roo-state-manager/mcp
+      - --header
+      - "Authorization:Bearer <bearer-token>"
 ```
-roosync_dashboard(
-  action: "append",
-  type: "global",
-  tags: ["ONLINE", "INFO"],
-  content: "Hermes workspace online on {machine-id}",
-  author: {machineId: "{machine-id}", workspace: "hermes"}
-)
+
+**Critical:** After Hermes expands the config (~1027 lines), verify these sections remain intact:
+- `model.default` and `model.provider` — may revert to defaults
+- `mcp_servers` — may be lost during expansion
+- `.env` file — may be overwritten by template during expansion
+
+### 5. Build and start
+
+```bash
+# From WSL2 or Linux
+cd /mnt/c/dev/hermes-agent
+HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose up -d
+```
+
+### 6. Verify
+
+```bash
+docker logs hermes --tail 20
+docker exec hermes /opt/hermes/.venv/bin/hermes -z "Bonjour, qui es-tu ?"
+```
+
+### 7. Test MCP access
+
+```bash
+docker exec hermes /opt/hermes/.venv/bin/hermes -z \
+  "Call roosync_dashboard with action list. Report dashboard count."
 ```
 
 ---
 
-## Cross-Workspace Validation Results
+## Known Issues
 
-Tested from myia-po-2025 (roo-extensions workspace) on 2026-05-01:
+### Config expansion wipes settings
 
-| Operation | Tool Call | Result |
-|-----------|-----------|--------|
-| List all dashboards | `roosync_dashboard(action: "list")` | 30 dashboards found |
-| Read global dashboard | `roosync_dashboard(action: "read", type: "global")` | OK (0.4% util, empty) |
-| Read nanoclaw workspace | `roosync_dashboard(action: "read", type: "workspace", workspace: "nanoclaw")` | OK (89.7% util, 24 msgs) |
-| Read CoursIA workspace | `roosync_dashboard(action: "read", type: "workspace", workspace: "CoursIA")` | OK (78.6% util, 27 msgs) |
-| Read roo-extensions workspace | `roosync_dashboard(action: "read", type: "workspace")` | OK (56.9% util, 17 msgs) |
+`hermes mcp remove` and similar commands expand config.yaml from ~15 lines to 1027+ lines, overwriting:
 
-**Conclusion:** All Hermes operations work from any workspace. No new MCP tools needed.
+- Model settings (reverts to OpenAI defaults)
+- `.env` file (replaces with template)
+- MCP server configs (lost entirely)
 
----
+**Workaround:** Always verify/restore these sections after any `hermes mcp` command.
 
-## Active Workspaces (as of 2026-05-01)
+### MCP stdio in Docker doesn't work for roo-state-manager
 
-| Workspace | Machine | Utilization | Status |
-|-----------|---------|-------------|--------|
-| roo-extensions | 6 machines | 56.9% | Active |
-| CoursIA | 5 machines | 78.6% | Active |
-| roo-state-manager | po-2024 | 80.4% | Active |
-| nanoclaw | web1/nanoclaw-cluster | 89.7% | Active |
-| vllm | ai-01 | 62.6% | Active |
-| 2025-Epita-Intelligence-Symbolique | po-2023 | 46.2% | Active |
-| Argumentum | po-2023 | 78.2% | Active |
-| Maintenance | ai-01 | 40.4% | Active |
+roo-state-manager reads host filesystem (Roo tasks in `%APPDATA%`, Qdrant on ai-01:6333). From Docker, only HTTP via `mcp-tools.myia.io` works. Never attempt stdio mounting.
+
+### MCP connection timing
+
+`hermes -z` one-shot mode may fail with "MCP connection is closed" on first attempt. Retry usually succeeds. The MCP connection takes ~12s to establish.
+
+### Windows path mangling
+
+`docker exec` from PowerShell mangles `/bin/sh` to Windows paths. Use `wsl -e bash -c "docker exec ..."` as a wrapper.
 
 ---
 
-## Machine Selection
+## Telegram Setup (Phase 6)
 
-| Machine | Pros | Cons | Verdict |
-|---------|------|------|---------|
-| **po-2026** | Design recommends it, familiar with OMC | Currently working #1854 | Best if available |
-| **po-2025** | Available now, intermittent is OK for Hermes | Personal machine, not always on | Viable for demo |
-| **web1** | Has nanoclaw cross-workspace experience | Often offline, needs restart | Backup |
+### 1. Create the bot
 
-**Recommendation:** po-2025 for Phase 2 demo (immediate), po-2026 for production deployment.
+Message @BotFather on Telegram:
+
+```text
+/newbot
+Name: MyIA Hermes
+Username: @MyIAHermesBot
+```
+
+Copy the bot token.
+
+### 2. Disable privacy mode
+
+**CRITICAL — do this BEFORE adding the bot to any group.**
+
+```text
+/setprivacy → @MyIAHermesBot → Disable
+```
+
+Privacy settings are frozen at group-add time. If the bot is already in a group, you must remove it, disable privacy, then re-add it.
+
+### 3. Configure environment
+
+Inside the container, write to `/opt/data/.env`:
+
+```text
+TELEGRAM_BOT_TOKEN=<token>
+TELEGRAM_ALLOWED_USERS=<your-telegram-user-id>
+TELEGRAM_GROUP_ALLOWED_USERS=<your-telegram-user-id>
+```
+
+### 4. Configure config.yaml
+
+The `telegram:` section inside the container's `/opt/data/config.yaml`:
+
+```yaml
+telegram:
+  reactions: true
+  require_mention: false
+  group_allow_from:
+    - '<your-telegram-user-id>'
+  channel_prompts: {}
+```
+
+**Note:** All config edits must be done inside the container (WSL2 path divergence — Docker mounts from `/home/jesse/.hermes`, not `C:\Users\jsboi\.hermes`).
+
+### 5. Restart and verify
+
+```bash
+docker restart hermes
+docker logs hermes --tail 20
+```
+
+DM the bot on Telegram with `/start` or any message. Confirm response.
+
+### 6. Add to group chat
+
+Create or open a group (e.g. "MyIA Cluster"), add @MyIAHermesBot as member. Send a message — the bot should respond.
+
+### 7. Set home channel
+
+In the group chat, run `/sethome` to designate the group as the delivery target for cron results and system notifications.
+
+### Telegram Channels
+
+| Channel              | Mode          | Purpose                       |
+|----------------------|---------------|-------------------------------|
+| DM @MyIAHermesBot    | User-Hermes   | Commands, admin, queries      |
+| DM @MyIANanoclawBot  | User-nanoclaw | Cluster manager interactions  |
+| Group "MyIA Cluster" | 3-way chat    | Coordination, experimentation |
+
+---
+
+## Docker Architecture
+
+```text
+docker-compose.yml
+  ├── gateway (hermes container, network_mode: host)
+  │     - Volume: ~/.hermes:/opt/data
+  │     - Command: gateway run
+  │     - MCP: HTTP via mcp-remote → mcp-tools.myia.io
+  │     - LLM: z.ai GLM-5-Turbo (coding endpoint)
+  │
+  └── dashboard (localhost:9119)
+        - Volume: ~/.hermes:/opt/data
+        - Command: dashboard --host 127.0.0.1 --no-open
+```
+
+---
+
+## Cluster Status (validated 2026-05-02)
+
+All 8 machines online, 0 offline, 0 warnings. po-2026 heartbeat confirmed active.
+
+Hermes one-shot tests validated:
+
+- GLM-5-Turbo connectivity via coding endpoint
+- Cluster health reporting (read_overview)
+- Task routing (TASK-ROUTE detection + routing analysis)

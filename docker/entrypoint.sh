@@ -50,6 +50,12 @@ if [ "$(id -u)" = "0" ]; then
         chmod 640 "$HERMES_HOME/config.yaml" 2>/dev/null || true
     fi
 
+    # Fix ownership of files created by `docker exec` (runs as root).
+    # Without this, cron/jobs.json and auth.json become root-owned after
+    # admin commands, causing Permission denied for the gateway process.
+    chown -R hermes:hermes "$HERMES_HOME/cron" 2>/dev/null || true
+    chown hermes:hermes "$HERMES_HOME/auth.json" 2>/dev/null || true
+
     echo "Dropping root privileges"
     exec gosu hermes "$0" "$@"
 fi
