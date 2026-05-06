@@ -55,6 +55,7 @@ if [ "$(id -u)" = "0" ]; then
     # admin commands, causing Permission denied for the gateway process.
     chown -R hermes:hermes "$HERMES_HOME/cron" 2>/dev/null || true
     chown hermes:hermes "$HERMES_HOME/auth.json" 2>/dev/null || true
+    chown hermes:hermes "$HERMES_HOME/auth.lock" 2>/dev/null || true
 
     echo "Dropping root privileges"
     exec gosu hermes "$0" "$@"
