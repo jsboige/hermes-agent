@@ -1460,11 +1460,29 @@ def _bump_server_error(server_name: str) -> None:
     When the count crosses :data:`_CIRCUIT_BREAKER_THRESHOLD`, stamp the
     breaker-open timestamp so the cooldown clock starts (or re-starts,
     for probe failures in the half-open state).
+
+    Additionally triggers a reconnect when the breaker first opens.
+    This recovers from stuck transports (e.g. ``mcp-remote`` subprocess
+    that stays alive but has a broken internal HTTP connection) without
+    requiring a full container restart.
     """
     n = _server_error_counts.get(server_name, 0) + 1
     _server_error_counts[server_name] = n
     if n >= _CIRCUIT_BREAKER_THRESHOLD:
+        was_open = server_name in _server_breaker_opened_at
         _server_breaker_opened_at[server_name] = time.monotonic()
+        if not was_open:
+            with _lock:
+                srv = _servers.get(server_name)
+            if srv is not None and hasattr(srv, "_reconnect_event"):
+                loop = _mcp_loop
+                if loop is not None and loop.is_running():
+                    loop.call_soon_threadsafe(srv._reconnect_event.set)
+                    logger.info(
+                        "MCP server '%s': circuit breaker opened (%d consecutive "
+                        "failures), triggering reconnect to recover stuck transport",
+                        server_name, n,
+                    )
 
 
 def _reset_server_error(server_name: str) -> None:
