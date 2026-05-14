@@ -1,0 +1,52 @@
+# Hermes Agent — Deployment config for po-2026 (z.ai)
+# DO NOT edit ~/.hermes/config.yaml directly — edit THIS file and re-deploy.
+# After editing, copy to volume and restart: see roosync-cluster/scripts/hermes-start.ps1
+
+model:
+  default: "glm-5-turbo"
+  provider: "zai"
+
+compression:
+  enabled: true
+  auxiliary_model: "glm-4.5-air"
+
+terminal:
+  backend: "local"
+
+display:
+  personality: "default"
+
+stt:
+  provider: "custom"
+  endpoint: "https://whisper-api.myia.io/v1"
+
+# MCP servers — LAN direct (bypass IIS ARR pool issues on po-2023)
+# Auth token in hermes-start.ps1 Docker env vars
+mcp_servers:
+  roo-state-manager:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://192.168.0.47:9090/roo-state-manager/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer d0dcf54aed997e794b3ba0f8ce599aff66796decd28284ab4c5b03a69790f33f"
+  sk-agent:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://192.168.0.47:9090/sk-agent/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer d0dcf54aed997e794b3ba0f8ce599aff66796decd28284ab4c5b03a69790f33f"
+  searxng:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://192.168.0.47:9090/searxng/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer d0dcf54aed997e794b3ba0f8ce599aff66796decd28284ab4c5b03a69790f33f"
