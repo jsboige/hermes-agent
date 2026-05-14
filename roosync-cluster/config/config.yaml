@@ -8,7 +8,11 @@ model:
 
 compression:
   enabled: true
-  auxiliary_model: "glm-4.5-air"
+
+auxiliary:
+  compression:
+    provider: "zai"
+    model: "glm-4.5-air"
 
 terminal:
   backend: "local"
