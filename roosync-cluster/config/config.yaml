@@ -21,8 +21,12 @@ display:
   personality: "default"
 
 stt:
-  provider: "custom"
-  endpoint: "https://whisper-api.myia.io/v1"
+  enabled: true
+  provider: "openai"
+  openai:
+    model: "whisper-1"
+    base_url: "https://whisper-api.myia.io/v1"
+    api_key: "HcE_kr3nU22t7HZ3ElQ6wm8Oz9RaRztOzKo4QEDUkG0TUhTJUM8iHwPQilEyicuJ"
 
 # MCP servers — LAN direct (bypass IIS ARR pool issues on po-2023)
 # Auth token in hermes-start.ps1 Docker env vars

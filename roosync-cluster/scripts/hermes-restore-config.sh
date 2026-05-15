@@ -69,6 +69,15 @@ auxiliary:
   web:
     provider: "zai"
 
+# STT — Cluster Whisper endpoint (self-hosted on po-2023, OpenAI-compatible)
+stt:
+  enabled: true
+  provider: "openai"
+  openai:
+    model: "whisper-1"
+    base_url: "https://whisper-api.myia.io/v1"
+    api_key: "HcE_kr3nU22t7HZ3ElQ6wm8Oz9RaRztOzKo4QEDUkG0TUhTJUM8iHwPQilEyicuJ"
+
 # Auto-approve for gateway cron jobs (no user to approve in gateway mode)
 # Without this, -e/-c flag commands get blocked → tool loops → SIGTERM crash
 approvals:
@@ -86,6 +95,7 @@ GATEWAY_ALLOW_ALL_USERS=false
 EOF
 
 # 5. Fix jobs.json format (must be {"jobs": [...]}, not bare array)
+# Also fixes: schedule string -> dict, repeat "forever" -> null
 echo "  -> Checking jobs.json format"
 if [ -f "$DATA/cron/jobs.json" ]; then
     python3 -c "
@@ -93,13 +103,25 @@ import json
 with open('$DATA/cron/jobs.json', 'r') as f:
     data = json.load(f)
 if isinstance(data, list):
-    with open('$DATA/cron/jobs.json', 'w') as f:
-        json.dump({'jobs': data}, f, indent=2, ensure_ascii=False)
-    print('  -> Fixed jobs.json: wrapped bare array in {\"jobs\": [...]}')
-else:
-    print('  -> jobs.json format OK')
+    data = {'jobs': data}
+for job in data.get('jobs', []):
+    sched = job.get('schedule')
+    if isinstance(sched, str):
+        job['schedule'] = {'kind': 'cron', 'expr': sched, 'display': sched}
+    if job.get('repeat') == 'forever':
+        job['repeat'] = None
+with open('$DATA/cron/jobs.json', 'w') as f:
+    json.dump(data, f, indent=2, ensure_ascii=False)
+print('  -> jobs.json OK (format + schedule + repeat)')
 " 2>/dev/null || echo "  -> Warning: could not check jobs.json format"
 fi
+
+# 5b. Install croniter (required for cron schedule computation)
+echo "  -> Checking croniter"
+/opt/hermes/.venv/bin/python3 -c 'import croniter' 2>/dev/null && echo "  -> croniter already installed" || {
+    echo "  -> Installing croniter..."
+    uv pip install --python /opt/hermes/.venv/bin/python3 --force-reinstall croniter 2>/dev/null && echo "  -> croniter installed" || echo "  -> Warning: croniter install failed"
+}
 
 # 6. Install gh CLI if missing
 echo "  -> Checking gh CLI"
