@@ -85,7 +85,36 @@ TELEGRAM_HOME_CHANNEL=-1003904676273
 GATEWAY_ALLOW_ALL_USERS=false
 EOF
 
-# 5. Fix ownership
-chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" 2>/dev/null || true
+# 5. Fix jobs.json format (must be {"jobs": [...]}, not bare array)
+echo "  -> Checking jobs.json format"
+if [ -f "$DATA/cron/jobs.json" ]; then
+    python3 -c "
+import json
+with open('$DATA/cron/jobs.json', 'r') as f:
+    data = json.load(f)
+if isinstance(data, list):
+    with open('$DATA/cron/jobs.json', 'w') as f:
+        json.dump({'jobs': data}, f, indent=2, ensure_ascii=False)
+    print('  -> Fixed jobs.json: wrapped bare array in {\"jobs\": [...]}')
+else:
+    print('  -> jobs.json format OK')
+" 2>/dev/null || echo "  -> Warning: could not check jobs.json format"
+fi
+
+# 6. Install gh CLI if missing
+echo "  -> Checking gh CLI"
+if ! command -v gh &>/dev/null; then
+    echo "  -> Installing gh CLI..."
+    ARCH=$(dpkg --print-architecture 2>/dev/null || echo "amd64")
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg 2>/dev/null
+    echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list
+    apt-get update -qq 2>/dev/null && apt-get install -y -qq gh 2>/dev/null
+    gh --version 2>/dev/null && echo "  -> gh CLI installed" || echo "  -> Warning: gh CLI install failed"
+else
+    echo "  -> gh CLI already installed: $(gh --version 2>/dev/null | head -1)"
+fi
+
+# 7. Fix ownership
+chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" 2>/dev/null || true
 
 echo "Done. Restart container to apply: docker restart hermes"
