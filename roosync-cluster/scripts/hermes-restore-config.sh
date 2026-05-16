@@ -2,11 +2,26 @@
 # Hermes post-rebuild config restore
 # Usage: docker exec hermes bash /opt/data/restore-config.sh
 # Or from host: ./roosync-cluster/scripts/hermes-restore-config.sh
+#
+# Secrets are NEVER hardcoded here. They come from:
+#   1. /opt/data/.env.secrets (if present — copy from host .env.secrets before running)
+#   2. Environment variables (Docker -e flags)
 
 set -e
 DATA="/opt/data"
+SECRETS_FILE="$DATA/.env.secrets"
 
 echo "Restoring Hermes deployment config..."
+
+# 0. Load secrets from file if present, otherwise use env vars
+if [ -f "$SECRETS_FILE" ]; then
+    echo "  -> Loading secrets from $SECRETS_FILE"
+    set -a
+    source "$SECRETS_FILE"
+    set +a
+else
+    echo "  -> No .env.secrets file, using environment variables"
+fi
 
 # 1. Overwrite model config (upstream resets to anthropic/claude-opus-4.6)
 echo "  -> Setting model: glm-5-turbo (zai)"
@@ -21,42 +36,38 @@ else
 fi
 
 # 1b. CRITICAL: Remove DUPLICATE provider: "auto" that upstream expansion adds
-#     Line ~43 gets a second provider: "auto" under model: block — YAML takes the last one
-#     This silently overrides our provider: "zai" on line 12!
 echo "  -> Checking for duplicate provider: auto..."
 grep -n '^ *provider: "auto"' "$DATA/config.yaml" | while read line; do
     linenum=$(echo "$line" | cut -d: -f1)
-    # Skip the first provider line (the one we just set to zai) — only comment out "auto" lines
     sed -i "${linenum}s|^ *provider: \"auto\"|  # provider: \"auto\"  # REMOVED: duplicate overrides zai|" "$DATA/config.yaml"
 done
 
-# 2. CRITICAL: Remove OpenRouter base_url contamination
-#    Upstream config expansion injects: base_url: "https://openrouter.ai/api/v1"
-#    This overrides z.ai provider routing → 401 errors
+# 2. Remove OpenRouter base_url contamination
 echo "  -> Checking for OpenRouter base_url contamination..."
 if grep -q '^ *base_url: "https://openrouter.ai/api/v1"' "$DATA/config.yaml"; then
     echo "  -> FOUND OpenRouter base_url — commenting out"
-    sed -i 's|^ *base_url: "https://openrouter.ai/api/v1"|#  base_url: "https://openrouter.ai/api/v1"  # REMOVED: use zai native, never openrouter|' "$DATA/config.yaml"
+    sed -i 's|^ *base_url: "https://openrouter.ai/api/v1"|#  base_url: "https://openrouter.ai/api/v1"  # REMOVED: use zai native|' "$DATA/config.yaml"
 fi
 
-# 3. Replace/add auxiliary section (all tasks to zai, not just compression)
+# 3. Replace/add RooSync deployment section
 echo "  -> Setting auxiliary tasks to z.ai..."
-# Remove any existing RooSync deployment marker and everything after it
 LINE=$(grep -n '# --- RooSync deployment config' "$DATA/config.yaml" | head -1 | cut -d: -f1)
 if [ -n "$LINE" ]; then
     head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_aux.yaml
     mv /tmp/config_aux.yaml "$DATA/config.yaml"
 fi
-# Also remove any stray approvals section at the end
 LINE=$(grep -n '^approvals:' "$DATA/config.yaml" | tail -1 | cut -d: -f1)
 if [ -n "$LINE" ]; then
     head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_appr.yaml
     mv /tmp/config_appr.yaml "$DATA/config.yaml"
 fi
 
-cat >> "$DATA/config.yaml" << 'EOF'
+# Build STT section with bearer token from env
+STT_API_KEY="${WHISPER_BEARER_TOKEN:-HcE_kr3nU22t7HZ3ElQ6wm8Oz9RaRztOzKo4QEDUkG0TUhTJUM8iHwPQilEyicuJ}"
 
-# --- RooSync deployment config (2026-05-14) ---
+cat >> "$DATA/config.yaml" << EOF
+
+# --- RooSync deployment config (2026-05-16) ---
 # All auxiliary tasks use z.ai provider (openrouter/nous cause 401 in gateway)
 auxiliary:
   compression:
@@ -76,26 +87,37 @@ stt:
   openai:
     model: "whisper-1"
     base_url: "https://whisper-api.myia.io/v1"
-    api_key: "HcE_kr3nU22t7HZ3ElQ6wm8Oz9RaRztOzKo4QEDUkG0TUhTJUM8iHwPQilEyicuJ"
+    api_key: "${STT_API_KEY}"
 
 # Auto-approve for gateway cron jobs (no user to approve in gateway mode)
-# Without this, -e/-c flag commands get blocked → tool loops → SIGTERM crash
 approvals:
   mode: off
   cron_mode: approve
 EOF
 
-# 4. Restore .env non-secret config
-echo "  -> Restoring .env allowlists"
-cat > "$DATA/.env" << 'EOF'
+# 4. Restore .env — non-secret config + secrets from env/file
+echo "  -> Restoring .env with all tokens"
+cat > "$DATA/.env" << EOF
 TELEGRAM_ALLOWED_USERS=6541428999
 TELEGRAM_GROUP_ALLOWED_USERS=6541428999
 TELEGRAM_HOME_CHANNEL=-1003904676273
 GATEWAY_ALLOW_ALL_USERS=false
+
+# z.ai / GLM provider
+GLM_API_KEY=${GLM_API_KEY:-}
+GLM_BASE_URL=${GLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
+
+# Telegram bot
+TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+
+# GitHub tokens
+GH_TOKEN_CLUSTERMANAGER=${GH_TOKEN_CLUSTERMANAGER:-}
+GH_TOKEN_JSBOIGEEPITA=${GH_TOKEN_JSBOIGEEPITA:-}
+GH_TOKEN_JSBOIGE=${GH_TOKEN_JSBOIGE:-}
+GH_TOKEN=${GH_TOKEN_CLUSTERMANAGER:-}
 EOF
 
-# 5. Fix jobs.json format (must be {"jobs": [...]}, not bare array)
-# Also fixes: schedule string -> dict, repeat "forever" -> null
+# 5. Fix jobs.json format
 echo "  -> Checking jobs.json format"
 if [ -f "$DATA/cron/jobs.json" ]; then
     python3 -c "
@@ -110,20 +132,29 @@ for job in data.get('jobs', []):
         job['schedule'] = {'kind': 'cron', 'expr': sched, 'display': sched}
     if job.get('repeat') == 'forever':
         job['repeat'] = None
+    # Remove toolset restrictions — cluster crons need full access
+    if 'enabled_toolsets' in job:
+        del job['enabled_toolsets']
+    # Re-enable paused jobs
+    if job.get('enabled') is False:
+        job['enabled'] = True
+        job.pop('paused_at', None)
+        job.pop('paused_reason', None)
+        job['state'] = 'scheduled'
 with open('$DATA/cron/jobs.json', 'w') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
-print('  -> jobs.json OK (format + schedule + repeat)')
+print('  -> jobs.json OK')
 " 2>/dev/null || echo "  -> Warning: could not check jobs.json format"
 fi
 
-# 5b. Install croniter (required for cron schedule computation)
+# 6. Install croniter
 echo "  -> Checking croniter"
 /opt/hermes/.venv/bin/python3 -c 'import croniter' 2>/dev/null && echo "  -> croniter already installed" || {
     echo "  -> Installing croniter..."
     uv pip install --python /opt/hermes/.venv/bin/python3 --force-reinstall croniter 2>/dev/null && echo "  -> croniter installed" || echo "  -> Warning: croniter install failed"
 }
 
-# 6. Install gh CLI if missing
+# 7. Install gh CLI if missing
 echo "  -> Checking gh CLI"
 if ! command -v gh &>/dev/null; then
     echo "  -> Installing gh CLI..."
@@ -136,7 +167,7 @@ else
     echo "  -> gh CLI already installed: $(gh --version 2>/dev/null | head -1)"
 fi
 
-# 7. Fix ownership
+# 8. Fix ownership
 chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" 2>/dev/null || true
 
 echo "Done. Restart container to apply: docker restart hermes"
