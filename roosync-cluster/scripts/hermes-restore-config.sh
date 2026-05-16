@@ -62,8 +62,11 @@ if [ -n "$LINE" ]; then
     mv /tmp/config_appr.yaml "$DATA/config.yaml"
 fi
 
-# Build STT section with bearer token from env
-STT_API_KEY="${WHISPER_BEARER_TOKEN:-HcE_kr3nU22t7HZ3ElQ6wm8Oz9RaRztOzKo4QEDUkG0TUhTJUM8iHwPQilEyicuJ}"
+# Require secrets — NO hardcoded fallbacks
+STT_API_KEY="${WHISPER_BEARER_TOKEN:-}"
+MCP_AUTH="${MCP_AUTH_TOKEN:-}"
+if [ -z "$STT_API_KEY" ]; then echo "ERROR: WHISPER_BEARER_TOKEN not set (add to .env.secrets)"; exit 1; fi
+if [ -z "$MCP_AUTH" ]; then echo "ERROR: MCP_AUTH_TOKEN not set (add to .env.secrets)"; exit 1; fi
 
 cat >> "$DATA/config.yaml" << EOF
 
@@ -88,6 +91,36 @@ stt:
     model: "whisper-1"
     base_url: "https://whisper-api.myia.io/v1"
     api_key: "${STT_API_KEY}"
+
+# MCP servers — LAN direct (bypass IIS ARR pool issues on po-2023)
+mcp_servers:
+  roo-state-manager:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://192.168.0.47:9090/roo-state-manager/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer ${MCP_AUTH}"
+  sk-agent:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://192.168.0.47:9090/sk-agent/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer ${MCP_AUTH}"
+  searxng:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://192.168.0.47:9090/searxng/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer ${MCP_AUTH}"
 
 # Auto-approve for gateway cron jobs (no user to approve in gateway mode)
 approvals:
@@ -170,4 +203,84 @@ fi
 # 8. Fix ownership
 chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" 2>/dev/null || true
 
+# 9. Verify everything
+echo ""
+echo "=== VERIFICATION ==="
+PASS=0
+FAIL=0
+
+check() {
+    local label="$1"
+    local result="$2"
+    if [ "$result" = "OK" ]; then
+        echo "  [PASS] $label"
+        PASS=$((PASS + 1))
+    else
+        echo "  [FAIL] $label — $result"
+        FAIL=$((FAIL + 1))
+    fi
+}
+
+# Model
+MODEL=$(grep '^  default:' "$DATA/config.yaml" | head -1)
+[[ "$MODEL" == *glm-5-turbo* ]] && check "Model" "OK" || check "Model" "got: $MODEL"
+
+# Provider
+PROV=$(grep '^  provider:' "$DATA/config.yaml" | head -1)
+[[ "$PROV" == *zai* ]] && check "Provider" "OK" || check "Provider" "got: $PROV"
+
+# No duplicate provider: auto
+DUP=$(grep -c '^ *provider: "auto"' "$DATA/config.yaml" 2>/dev/null || echo 0)
+[ "$DUP" = "0" ] && check "No duplicate provider:auto" "OK" || check "No duplicate provider:auto" "found $DUP"
+
+# No OpenRouter contamination
+OR_URL=$(grep -c 'openrouter.ai' "$DATA/config.yaml" 2>/dev/null || echo 0)
+[ "$OR_URL" = "0" ] && check "No OpenRouter base_url" "OK" || check "No OpenRouter base_url" "found $OR_URL"
+
+# Auxiliary
+AUX=$(grep -c 'provider: "zai"' "$DATA/config.yaml")
+[ "$AUX" -ge 4 ] && check "Auxiliary providers (zai)" "OK" || check "Auxiliary providers" "only $AUX zai entries"
+
+# STT
+STT=$(grep -c 'whisper-api.myia.io' "$DATA/config.yaml")
+[ "$STT" -ge 1 ] && check "STT endpoint" "OK" || check "STT endpoint" "not found"
+
+# MCP servers
+MCPS=$(grep -c 'mcp_servers:' "$DATA/config.yaml")
+[ "$MCPS" -ge 1 ] && check "MCP servers section" "OK" || check "MCP servers section" "not found"
+MCP_COUNT=$(grep -c '192.168.0.47:9090' "$DATA/config.yaml")
+[ "$MCP_COUNT" -ge 3 ] && check "MCP bridges (3)" "OK" || check "MCP bridges" "only $MCP_COUNT"
+
+# Approvals
+APPR=$(grep -c 'cron_mode: approve' "$DATA/config.yaml")
+[ "$APPR" -ge 1 ] && check "Approvals (cron_mode)" "OK" || check "Approvals" "not found"
+
+# .env secrets
+for tok in GLM_API_KEY TELEGRAM_BOT_TOKEN GH_TOKEN_CLUSTERMANAGER; do
+    VAL=$(grep "^${tok}=" "$DATA/.env" | cut -d= -f2)
+    [ -n "$VAL" ] && check ".env $tok" "OK" || check ".env $tok" "EMPTY"
+done
+
+# jobs.json
+if [ -f "$DATA/cron/jobs.json" ]; then
+    JOBS=$(python3 -c "import json; d=json.load(open('$DATA/cron/jobs.json')); print(len(d.get('jobs',[])))" 2>/dev/null || echo 0)
+    [ "$JOBS" -ge 1 ] && check "Cron jobs ($JOBS)" "OK" || check "Cron jobs" "found $JOBS"
+    TOOLSETS=$(python3 -c "import json; d=json.load(open('$DATA/cron/jobs.json')); print(sum(1 for j in d.get('jobs',[]) if 'enabled_toolsets' in j))" 2>/dev/null || echo "?")
+    [ "$TOOLSETS" = "0" ] && check "No enabled_toolsets restrictions" "OK" || check "No enabled_toolsets" "$TOOLSETS jobs have restrictions"
+else
+    check "Cron jobs" "jobs.json not found"
+fi
+
+# gh CLI
+command -v gh &>/dev/null && check "gh CLI" "OK" || check "gh CLI" "not installed"
+
+# croniter
+/opt/hermes/.venv/bin/python3 -c 'import croniter' 2>/dev/null && check "croniter" "OK" || check "croniter" "not installed"
+
+echo ""
+if [ "$FAIL" = "0" ]; then
+    echo "=== ALL $PASS CHECKS PASSED ==="
+else
+    echo "=== $PASS passed, $FAIL FAILED ==="
+fi
 echo "Done. Restart container to apply: docker restart hermes"

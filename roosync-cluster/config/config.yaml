@@ -26,10 +26,10 @@ stt:
   openai:
     model: "whisper-1"
     base_url: "https://whisper-api.myia.io/v1"
-    api_key: "HcE_kr3nU22t7HZ3ElQ6wm8Oz9RaRztOzKo4QEDUkG0TUhTJUM8iHwPQilEyicuJ"
+    api_key: "${WHISPER_BEARER_TOKEN}"
 
 # MCP servers — LAN direct (bypass IIS ARR pool issues on po-2023)
-# Auth token in hermes-start.ps1 Docker env vars
+# Auth token from MCP_AUTH_TOKEN in .env.secrets
 mcp_servers:
   roo-state-manager:
     command: npx
@@ -39,7 +39,7 @@ mcp_servers:
       - http://192.168.0.47:9090/roo-state-manager/mcp
       - --allow-http
       - --header
-      - "Authorization:Bearer d0dcf54aed997e794b3ba0f8ce599aff66796decd28284ab4c5b03a69790f33f"
+      - "Authorization:Bearer ${MCP_AUTH_TOKEN}"
   sk-agent:
     command: npx
     args:
@@ -48,7 +48,7 @@ mcp_servers:
       - http://192.168.0.47:9090/sk-agent/mcp
       - --allow-http
       - --header
-      - "Authorization:Bearer d0dcf54aed997e794b3ba0f8ce599aff66796decd28284ab4c5b03a69790f33f"
+      - "Authorization:Bearer ${MCP_AUTH_TOKEN}"
   searxng:
     command: npx
     args:
@@ -57,4 +57,4 @@ mcp_servers:
       - http://192.168.0.47:9090/searxng/mcp
       - --allow-http
       - --header
-      - "Authorization:Bearer d0dcf54aed997e794b3ba0f8ce599aff66796decd28284ab4c5b03a69790f33f"
+      - "Authorization:Bearer ${MCP_AUTH_TOKEN}"
