@@ -50,12 +50,27 @@ if grep -q '^ *base_url: "https://openrouter.ai/api/v1"' "$DATA/config.yaml"; th
 fi
 
 # 3. Replace/add RooSync deployment section
-echo "  -> Setting auxiliary tasks to z.ai..."
+# Remove ALL RooSync sections (from previous runs) and original upstream sections
+# that we override, to prevent YAML duplicate key errors.
+echo "  -> Removing old RooSync and upstream sections..."
 LINE=$(grep -n '# --- RooSync deployment config' "$DATA/config.yaml" | head -1 | cut -d: -f1)
+if [ -n "$LINE" ]; then
+    head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_strip.yaml
+    mv /tmp/config_strip.yaml "$DATA/config.yaml"
+fi
+# Remove original auxiliary: section (upstream) — we replace it
+LINE=$(grep -n '^auxiliary:' "$DATA/config.yaml" | head -1 | cut -d: -f1)
 if [ -n "$LINE" ]; then
     head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_aux.yaml
     mv /tmp/config_aux.yaml "$DATA/config.yaml"
 fi
+# Remove original stt: section (upstream) — we replace it
+LINE=$(grep -n '^stt:' "$DATA/config.yaml" | head -1 | cut -d: -f1)
+if [ -n "$LINE" ]; then
+    head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_stt.yaml
+    mv /tmp/config_stt.yaml "$DATA/config.yaml"
+fi
+# Remove any approvals: section
 LINE=$(grep -n '^approvals:' "$DATA/config.yaml" | tail -1 | cut -d: -f1)
 if [ -n "$LINE" ]; then
     head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_appr.yaml
@@ -224,6 +239,17 @@ check() {
 # Model
 MODEL=$(grep '^  default:' "$DATA/config.yaml" | head -1)
 [[ "$MODEL" == *glm-5-turbo* ]] && check "Model" "OK" || check "Model" "got: $MODEL"
+
+# YAML valid (no duplicate keys)
+DUP_AUX=$(grep -c '^auxiliary:' "$DATA/config.yaml")
+DUP_STT=$(grep -c '^stt:' "$DATA/config.yaml")
+DUP_MCP=$(grep -c '^mcp_servers:' "$DATA/config.yaml")
+DUP_APPR=$(grep -c '^approvals:' "$DATA/config.yaml")
+if [ "$DUP_AUX" -le 1 ] && [ "$DUP_STT" -le 1 ] && [ "$DUP_MCP" -le 1 ] && [ "$DUP_APPR" -le 1 ]; then
+    check "YAML no duplicate keys" "OK"
+else
+    check "YAML duplicates" "aux=$DUP_AUX stt=$DUP_STT mcp=$DUP_MCP appr=$DUP_APPR"
+fi
 
 # Provider
 PROV=$(grep '^  provider:' "$DATA/config.yaml" | head -1)
