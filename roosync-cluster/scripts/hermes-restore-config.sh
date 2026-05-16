@@ -230,11 +230,11 @@ PROV=$(grep '^  provider:' "$DATA/config.yaml" | head -1)
 [[ "$PROV" == *zai* ]] && check "Provider" "OK" || check "Provider" "got: $PROV"
 
 # No duplicate provider: auto
-DUP=$(grep -c '^ *provider: "auto"' "$DATA/config.yaml" 2>/dev/null || echo 0)
+DUP=$(grep -c '^ *provider: "auto"' "$DATA/config.yaml" || true)
 [ "$DUP" = "0" ] && check "No duplicate provider:auto" "OK" || check "No duplicate provider:auto" "found $DUP"
 
 # No OpenRouter contamination
-OR_URL=$(grep -c 'openrouter.ai' "$DATA/config.yaml" 2>/dev/null || echo 0)
+OR_URL=$(grep -c 'openrouter.ai' "$DATA/config.yaml" || true)
 [ "$OR_URL" = "0" ] && check "No OpenRouter base_url" "OK" || check "No OpenRouter base_url" "found $OR_URL"
 
 # Auxiliary
