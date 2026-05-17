@@ -1,6 +1,2 @@
 # Auto-generated files — collapse diffs and exclude from language stats
 web/package-lock.json linguist-generated=true
-
-# Shell scripts must use LF (Docker/WSL2 compatibility)
-*.sh text eol=lf
-docker/entrypoint.sh text eol=lf

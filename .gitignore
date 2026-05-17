@@ -70,7 +70,6 @@ mini-swe-agent/
 result
 website/static/api/skills-index.json
 models-dev-upstream/
-.playwright-mcp/
-
-# Deployment secrets (RooSync)
-roosync-cluster/config/.env.secrets
+hermes_cli/tui_dist/*
+hermes_cli/scripts/
+docs/superpowers/*
