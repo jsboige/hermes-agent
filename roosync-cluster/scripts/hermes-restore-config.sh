@@ -189,6 +189,11 @@ for job in data.get('jobs', []):
         job.pop('paused_at', None)
         job.pop('paused_reason', None)
         job['state'] = 'scheduled'
+    # Enforce 30min interval for ping-intercom (alternance with NanoClaw :15,:45)
+    if 'ping-intercom' in job.get('name', '') and job.get('schedule', {}).get('kind') == 'interval':
+        job['schedule']['minutes'] = 30
+        job['schedule']['display'] = 'every 30m'
+        job['schedule_display'] = 'every 30m'
 with open('$DATA/cron/jobs.json', 'w') as f:
     json.dump(data, f, indent=2, ensure_ascii=False)
 print('  -> jobs.json OK')
