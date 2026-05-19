@@ -25,7 +25,10 @@ param(
     [int]$McpErrorThreshold = 5,
     [int]$LogWindowMinutes = 15,
     [string]$McpProxyUrl = "http://192.168.0.47:9090/roo-state-manager/mcp",
-    [string]$LogPath = "$PSScriptRoot\..\logs\mcp-watchdog.log"
+    [string]$LogPath = "$PSScriptRoot\..\logs\mcp-watchdog.log",
+    [int]$ContainerAgeThresholdMinutes = 5,
+    [int]$ConsecutiveFailThreshold = 3,
+    [string]$StateFile = "$PSScriptRoot\..\logs\mcp-watchdog-state.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -62,6 +65,10 @@ foreach ($name in @("roo-state-manager", "sk-agent", "searxng")) {
 
 if ($bridgeCount -eq $ExpectedBridges) {
     Write-Log "All $ExpectedBridges MCP bridges active." "DEBUG"
+    # Reset consecutive failure counter when healthy
+    if (Test-Path $StateFile) {
+        @{ ConsecutiveFailures = 0; LastCheck = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ') } | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
+    }
     exit 0
 }
 
@@ -103,12 +110,46 @@ $mcpErrors = ($logs | Where-Object {
 })
 $errorCount = ($mcpErrors | Measure-Object).Count
 
-# --- Decision: restart if bridges are missing AND proxy is reachable ---
-Write-Log "Proxy reachable, missing $($missingBridges.Count) bridge(s), $errorCount MCP errors in ${LogWindowMinutes}min. Restarting." "ERROR"
+# --- Check 5: Container age — skip if recently started (bridges still connecting) ---
+$startedAtRaw = docker inspect --format='{{.State.StartedAt}}' $ContainerName 2>$null
+if ($LASTEXITCODE -eq 0 -and $startedAtRaw) {
+    # Parse ISO 8601 timestamp (Docker returns nanosecond precision)
+    $startedAtStr = $startedAtRaw -replace '\.\d+Z$', 'Z'
+    $startedAt = [DateTimeOffset]::Parse($startedAtStr).UtcDateTime
+    $containerAge = ((Get-Date).ToUniversalTime() - $startedAt).TotalMinutes
+    if ($containerAge -lt $ContainerAgeThresholdMinutes) {
+        Write-Log "Container started $($containerAge.ToString('F1'))min ago (< ${ContainerAgeThresholdMinutes}min threshold). Bridges still connecting — skipping." "WARN"
+        exit 0
+    }
+}
+
+# --- Check 6: Consecutive failure tracking — require N consecutive failures before restarting ---
+$consecutiveFailures = 0
+if (Test-Path $StateFile) {
+    try {
+        $state = Get-Content $StateFile -Raw | ConvertFrom-Json
+        $consecutiveFailures = [int]$state.ConsecutiveFailures
+    }
+    catch { $consecutiveFailures = 0 }
+}
+
+$consecutiveFailures++
+$stateData = @{ ConsecutiveFailures = $consecutiveFailures; LastCheck = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ') }
+$stateData | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
+
+if ($consecutiveFailures -lt $ConsecutiveFailThreshold) {
+    Write-Log "Missing $($missingBridges.Count) bridge(s), but only $consecutiveFailures/$ConsecutiveFailThreshold consecutive failures. Waiting." "WARN"
+    exit 0
+}
+
+# --- Decision: restart only after N consecutive failures, proxy reachable, and container is old enough ---
+Write-Log "Proxy reachable, missing $($missingBridges.Count) bridge(s) for $consecutiveFailures consecutive checks, $errorCount MCP errors. Restarting." "ERROR"
 
 docker restart $ContainerName
 if ($LASTEXITCODE -eq 0) {
     Write-Log "Container '$ContainerName' restarted successfully. Bridges should reconnect within 30s." "INFO"
+    # Reset failure counter on successful restart
+    @{ ConsecutiveFailures = 0; LastCheck = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ') } | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
 }
 else {
     Write-Log "Failed to restart container '$ContainerName'." "ERROR"
