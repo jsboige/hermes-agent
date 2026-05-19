@@ -322,15 +322,21 @@ class PlatformConfig:
         if "home_channel" in data:
             home_channel = HomeChannel.from_dict(data["home_channel"])
 
+        # gateway_restart_notification may be bridged into extra via the
+        # shared-key loop in load_gateway_config(); check both top-level
+        # and extra so YAML ``discord: gateway_restart_notification: false``
+        # works without needing a separate platforms: block.
+        _grn = data.get("gateway_restart_notification")
+        if _grn is None:
+            _grn = data.get("extra", {}).get("gateway_restart_notification")
+
         return cls(
             enabled=_coerce_bool(data.get("enabled"), False),
             token=data.get("token"),
             api_key=data.get("api_key"),
             home_channel=home_channel,
             reply_to_mode=data.get("reply_to_mode", "first"),
-            gateway_restart_notification=_coerce_bool(
-                data.get("gateway_restart_notification"), True
-            ),
+            gateway_restart_notification=_coerce_bool(_grn, True),
             extra=data.get("extra", {}),
         )
 
@@ -352,12 +358,13 @@ class StreamingConfig:
     # Transport selection:
     #   "auto"  — prefer native streaming-draft updates when the platform
     #             supports them (Telegram sendMessageDraft, Bot API 9.5+);
-    #             fall back to edit-based when not.  Recommended.
+    #             fall back to edit-based when not.
     #   "draft" — explicitly request native drafts; falls back to edit when
     #             the platform/chat doesn't support them.
-    #   "edit"  — progressive editMessageText only (legacy behaviour).
+    #   "edit"  — progressive editMessageText only (legacy/default
+    #             behaviour).
     #   "off"   — disable streaming entirely.
-    transport: str = "auto"
+    transport: str = "edit"
     edit_interval: float = DEFAULT_STREAMING_EDIT_INTERVAL
     buffer_threshold: int = DEFAULT_STREAMING_BUFFER_THRESHOLD
     cursor: str = DEFAULT_STREAMING_CURSOR
@@ -386,7 +393,7 @@ class StreamingConfig:
             return cls()
         return cls(
             enabled=_coerce_bool(data.get("enabled"), False),
-            transport=data.get("transport", "auto"),
+            transport=data.get("transport", "edit"),
             edit_interval=_coerce_float(
                 data.get("edit_interval"), DEFAULT_STREAMING_EDIT_INTERVAL,
             ),
@@ -821,6 +828,10 @@ def load_gateway_config() -> GatewayConfig:
                     bridged["reply_in_thread"] = platform_cfg["reply_in_thread"]
                 if "require_mention" in platform_cfg:
                     bridged["require_mention"] = platform_cfg["require_mention"]
+                if plat == Platform.TELEGRAM and "allowed_chats" in platform_cfg:
+                    bridged["allowed_chats"] = platform_cfg["allowed_chats"]
+                if plat == Platform.TELEGRAM and "allowed_topics" in platform_cfg:
+                    bridged["allowed_topics"] = platform_cfg["allowed_topics"]
                 if "free_response_channels" in platform_cfg:
                     bridged["free_response_channels"] = platform_cfg["free_response_channels"]
                 if "mention_patterns" in platform_cfg:
@@ -849,6 +860,8 @@ def load_gateway_config() -> GatewayConfig:
                         bridged["channel_prompts"] = {str(k): v for k, v in channel_prompts.items()}
                     else:
                         bridged["channel_prompts"] = channel_prompts
+                if "gateway_restart_notification" in platform_cfg:
+                    bridged["gateway_restart_notification"] = platform_cfg["gateway_restart_notification"]
                 enabled_was_explicit = "enabled" in platform_cfg
                 if not bridged and not enabled_was_explicit:
                     continue
@@ -1008,6 +1021,11 @@ def load_gateway_config() -> GatewayConfig:
                     if isinstance(ac, list):
                         ac = ",".join(str(v) for v in ac)
                     os.environ["TELEGRAM_ALLOWED_CHATS"] = str(ac)
+                allowed_topics = telegram_cfg.get("allowed_topics")
+                if allowed_topics is not None and not os.getenv("TELEGRAM_ALLOWED_TOPICS"):
+                    if isinstance(allowed_topics, list):
+                        allowed_topics = ",".join(str(v) for v in allowed_topics)
+                    os.environ["TELEGRAM_ALLOWED_TOPICS"] = str(allowed_topics)
                 ignored_threads = telegram_cfg.get("ignored_threads")
                 if ignored_threads is not None and not os.getenv("TELEGRAM_IGNORED_THREADS"):
                     if isinstance(ignored_threads, list):
@@ -1053,6 +1071,12 @@ def load_gateway_config() -> GatewayConfig:
                             extra = {}
                             plat_data["extra"] = extra
                         extra[_telegram_extra_key] = telegram_cfg[_telegram_extra_key]
+                if _telegram_extra:
+                    _plat_data, _plat_extra = _ensure_platform_extra_dict(
+                        platforms_data, Platform.TELEGRAM.value
+                    )
+                    for _telegram_extra_key, _telegram_extra_value in _telegram_extra.items():
+                        _plat_extra.setdefault(_telegram_extra_key, _telegram_extra_value)
 
             whatsapp_cfg = yaml_cfg.get("whatsapp", {})
             if isinstance(whatsapp_cfg, dict):
