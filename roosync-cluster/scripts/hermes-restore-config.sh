@@ -258,7 +258,7 @@ else
 fi
 
 # 8. Fix ownership
-chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" "$DATA/.config" 2>/dev/null || true
+chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" "$DATA/.config" "$DATA/kanban.db" "$DATA/kanban.db-wal" "$DATA/kanban.db-shm" 2>/dev/null || true
 
 # 8b. Patch kanban SCHEMA_SQL — remove premature CREATE INDEX for session_id
 # Upstream bug: SCHEMA_SQL has CREATE INDEX on session_id before migration adds the column

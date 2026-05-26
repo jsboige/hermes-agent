@@ -27,6 +27,7 @@ Hermes is a **read-only** cluster coordinator: route tasks, track hand-offs, aud
 
 ### Communication channels
 
+- **Bot coordination:** `roosync_dashboard(type: "workspace", workspace: "cluster-coordination")` — deployment reports, inter-bot messages
 - **Dashboard workspace:** `roosync_dashboard(type: "workspace", workspace: "hermes-agent")`
 - **Dashboard global:** `roosync_dashboard(type: "global")` — routing + health reports
 - **Cross-machine:** `roosync_send/read` for urgent notifications
@@ -171,58 +172,143 @@ Three config loaders exist — know which one you're in:
 
 ## Deployment (po-2026)
 
-### Docker
+### Container
 
-```bash
-# Pull & run (basic)
-docker run -d --name hermes \
-  --restart unless-stopped \
-  -v ~/.hermes:/opt/data \
-  -p 8642:8642 \
-  -p 9119:9119 \
-  -e GATEWAY_HEALTH_URL=http://localhost:9119 \
-  nousresearch/hermes-agent gateway run
+- **Image:** `hermes-agent:s6-20260526` (local build from fork, NOT upstream pull)
+- **PID 1:** `s6-svscan` (s6-overlay v3.2.3.0, replaces old tini/gosu)
+- **User:** `hermes` (UID 10000) via `s6-setuidgid`
+- **Volume:** `C:\Users\jsboi\.hermes` → `/opt/data` (persistent across rebuilds)
+- **Ports:** `-p 9120:9119` (host 9120 → container 9119 dashboard UI)
 
-# With browser tools (needs shared memory)
-docker run -d --name hermes \
-  --shm-size=1g \
-  --cap-drop=ALL \
-  ... nousresearch/hermes-agent gateway run
+### Docker run command (production)
+
+```powershell
+docker run -d --name hermes `
+  --restart unless-stopped `
+  -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes `
+  -p 9120:9119 `
+  hermes-agent:s6-20260526 gateway run
 ```
 
-- Data volume: `/opt/data` → `~/.hermes`
-- API server: port 8642 | Dashboard UI: port 9119
-- RAM: 1-4 GB depending on tools | One container per profile
-- Permissions: `HERMES_UID`/`HERMES_GID` to match host user
+No `-e` flags needed — all secrets come from `/opt/data/.env.secrets` loaded by the restore script.
+
+### Boot sequence (s6-overlay Architecture B)
+
+```
+/init (s6-svscan, PID 1)
+  ├── s6-rc-compile bundle (oneshot-runner, fix-attrs)
+  ├── cont-init.d/ (lexicographic order):
+  │   ├── 01-hermes-setup     ← stage2-hook.sh: sync bundled skills
+  │   ├── 013-roosync-restore ← OUR SHIM: invokes /opt/data/restore-config.sh
+  │   ├── 015-supervise-perms ← chown supervise/ trees
+  │   └── 02-reconcile-profiles ← register default profile
+  ├── s6-rc services:
+  │   ├── main-hermes  ← CMD wrapper (main-wrapper.sh)
+  │   └── dashboard    ← Web dashboard server
+  └── CMD = main-wrapper.sh
+      └── exec s6-setuidgid hermes hermes gateway run
+```
+
+### Restore script
+
+`roosync-cluster/scripts/hermes-restore-config.sh` is copied to `/opt/data/restore-config.sh` on the persistent volume. Called by `013-roosync-restore` cont-init.d shim on every container start.
+
+**What it does (in order):**
+1. Load secrets from `/opt/data/.env.secrets`
+2. Set model to `glm-5-turbo` with `provider: "zai"`
+3. Remove duplicate `provider: "auto"` and OpenRouter `base_url` contamination
+4. Append RooSync deployment config (auxiliary providers, STT, MCP servers, approvals)
+5. Write `/opt/data/.env` with all tokens (GLM, Telegram, GitHub)
+6. Fix `jobs.json` format (list→dict, schedule normalization, remove toolset restrictions)
+7. Install `croniter`, `gh` CLI, `jq`
+8. Configure `gh auth` (persisted to `/opt/data/.config/gh`)
+9. Patch kanban `SCHEMA_SQL` (session_id index before migration)
+10. Run 21 verification checks (PASS/FAIL)
+
+### 3 Windows patches (MUST re-apply after upstream sync)
+
+These patches exist because Windows git checkout introduces CRLF and s6-overlay env isolation breaks Docker ENV inheritance.
+
+1. **CRLF strip** — Dockerfile adds `RUN find /etc/s6-overlay/s6-rc.d -type f -exec sed -i 's/\r$//' {} +` and same for `/etc/cont-init.d` after each COPY block. Without this, `s6-rc-compile` fails with "invalid type".
+
+2. **`#!/command/with-contenv sh`** shebang on `docker/main-wrapper.sh`. Without this, CMD runs with only ~6 env vars (PATH, PWD, etc.) — Dockerfile ENV and `docker run -e` are NOT inherited. `with-contenv` loads from `/run/s6/container_environment/`.
+
+3. **`export HOME="/opt/data"`** in main-wrapper.sh. `with-contenv` injects `HOME=/root` from Docker env, but `s6-setuidgid hermes` cannot write to `/root/`. Must override before exec.
+
+### Dockerfile drift (our additions vs upstream)
+
+These are the ONLY lines we add to the upstream Dockerfile:
+
+```dockerfile
+# After COPY docker/s6-rc.d/:
+RUN find /etc/s6-overlay/s6-rc.d -type f -exec sed -i 's/\r$//' {} +
+
+# After COPY docker/cont-init.d/*:
+COPY --chmod=0755 docker/cont-init.d/013-roosync-restore /etc/cont-init.d/013-roosync-restore
+RUN find /etc/cont-init.d -type f -exec sed -i 's/\r$//' {} +
+```
+
+Plus modifications to `docker/main-wrapper.sh` (shebang + HOME override — see patch #2 and #3 above).
+
+### Persistent volume contents (survives rebuild)
+
+| Path | Content |
+|------|---------|
+| `state.db` | SQLite session database |
+| `sessions/` | Conversation history |
+| `skills/` | Custom skills |
+| `memories/` | Agent memories |
+| `config.yaml` | Full config (restored by script) |
+| `.env` | Tokens (regenerated by script) |
+| `.env.secrets` | Secret values for script |
+| `SOUL.md` | Agent personality |
+| `cron/jobs.json` | Scheduled jobs |
+| `.config/gh/` | GitHub CLI auth |
+| `restore-config.sh` | Copy of restore script |
+
+**NOT persistent** (reinstalled by restore script): `gh` CLI, `jq`, `croniter`, kanban patch.
+
+### Rollback
+
+```powershell
+# If new image is broken, restore old tini-based container:
+docker stop hermes
+docker rm hermes
+docker run -d --name hermes `
+  --restart unless-stopped `
+  -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes `
+  -p 9120:9119 `
+  hermes-agent:tini-backup-20260526 gateway run
+```
 
 ### z.ai provider (CRITICAL)
 
-Use NATIVE z.ai (`provider: "zai"`, built-in `/api/paas/v4` endpoint). NEVER use `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic` — the Anthropic-compat translation layer causes MCP tool registry loss after compaction.
+Use NATIVE z.ai (`provider: "zai"`, built-in `/api/coding/paas/v4` endpoint). NEVER use `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic` — the Anthropic-compat translation layer causes MCP tool registry loss after compaction.
 
-### Gateway service
+### MCP servers (container)
 
-```bash
-hermes gateway setup    # Interactive: platform + token
-hermes gateway install  # systemd (Linux) / launchd (macOS)
-hermes gateway start / stop / status
-```
+All 3 MCP servers connect via `mcp-remote` to `http://192.168.0.47:9090` (LAN direct, bypasses IIS ARR):
+- `roo-state-manager` → `/roo-state-manager/mcp`
+- `sk-agent` → `/sk-agent/mcp`
+- `searxng` → `/searxng/mcp`
 
-### Telegram bring-up
+Auth: `Authorization: Bearer ${MCP_AUTH_TOKEN}` from `.env.secrets`.
 
-1. @BotFather → `/newbot` → get token
-2. `hermes gateway setup` → Telegram → paste token
-3. DM bot to pair (first user = owner)
+### Cluster ASR
+
+`https://whisper-api.myia.io/v1` — self-hosted Whisper on po-2023. Auth via `WHISPER_BEARER_TOKEN` from `.env.secrets`.
 
 ### Context compression
 
 ```yaml
-compression:
-  enabled: true
-  auxiliary_model: "glm-4-flash"  # cheaper model for summaries
+auxiliary:
+  compression:
+    provider: "zai"
+    model: "glm-4.5-air"
 ```
 
 Watch for `tool_use_error` after compaction — restart session if seen.
 
-### Cluster ASR
+### Dashboard coordination
 
-`https://whisper-api.myia.io/v1` — available for voice memo transcription, no token needed internally.
+Bots coordinate on `workspace-cluster-coordination` dashboard, NOT on `workspace-hermes-agent` or `global`. Always post deployment reports and status changes there.
