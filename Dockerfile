@@ -169,6 +169,8 @@ RUN uv pip install --no-cache-dir --no-deps -e "."
 # /run/service/ (tmpfs) and are reconciled on container restart by
 # /etc/cont-init.d/02-reconcile-profiles (Phase 4 Task 4.0).
 COPY docker/s6-rc.d/ /etc/s6-overlay/s6-rc.d/
+# Strip CRLF from s6-overlay files (Windows git checkout may introduce \r)
+RUN find /etc/s6-overlay/s6-rc.d -type f -exec sed -i 's/\r$//' {} +
 
 # stage2-hook handles UID/GID remap, volume chown, config seeding,
 # skills sync — all the work the old entrypoint.sh did before
@@ -186,6 +188,8 @@ COPY --chmod=0755 docker/cont-init.d/015-supervise-perms /etc/cont-init.d/015-su
 COPY --chmod=0755 docker/cont-init.d/02-reconcile-profiles /etc/cont-init.d/02-reconcile-profiles
 # RooSync: restore custom deployment config from persistent volume
 COPY --chmod=0755 docker/cont-init.d/013-roosync-restore /etc/cont-init.d/013-roosync-restore
+# Strip CRLF from cont-init.d scripts (Windows git checkout may introduce \r)
+RUN find /etc/cont-init.d -type f -exec sed -i 's/\r$//' {} +
 
 # ---------- Runtime ----------
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/command/with-contenv sh
+# shellcheck shell=sh
 # /opt/hermes/docker/main-wrapper.sh — wraps the container's CMD with
 # the same argument-routing logic the pre-s6 entrypoint.sh used. Runs
 # as /init's "main program" (Docker CMD) so it inherits stdin/stdout/
@@ -12,6 +13,12 @@
 # We drop to the hermes user via `s6-setuidgid` so the supervised
 # workload runs unprivileged (UID 10000 by default).
 set -e
+
+# Override HOME so s6-setuidgid hermes can write state/lock files.
+# with-contenv injects HOME=/root from the Docker environment, but the
+# hermes user (UID 10000) cannot write to /root/.  Point HOME at the
+# persistent data volume instead.
+export HOME="/opt/data"
 
 cd /opt/data
 # shellcheck disable=SC1091

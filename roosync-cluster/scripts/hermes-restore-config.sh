@@ -237,7 +237,7 @@ if [ -n "$GH_TOKEN_VAL" ]; then
     # Persist gh config to /opt/data so it survives container restarts
     mkdir -p /opt/data/.config/gh
     ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
-    echo "$GH_TOKEN_VAL" | gh auth login --with-token 2>/dev/null
+    echo "$GH_TOKEN_VAL" | gh auth login --with-token 2>/dev/null || true
     if gh auth status &>/dev/null; then
         echo "  -> gh auth configured (token from GH_TOKEN_CLUSTERMANAGER)"
     else
