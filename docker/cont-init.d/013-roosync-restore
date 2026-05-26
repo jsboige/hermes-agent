@@ -1,0 +1,23 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# RooSync deployment restore — runs AFTER upstream stage2-hook (01-hermes-setup)
+# seeds config.yaml with upstream defaults, but BEFORE profile reconciliation
+# (02-reconcile-profiles) and s6-rc start.
+#
+# This is a thin shim. The actual restore logic lives in
+# /opt/data/restore-config.sh on the persistent volume so it can be
+# updated without rebuilding the image.
+#
+# Ordering: 01-hermes-setup -> 013-roosync-restore -> 015-supervise-perms
+#           -> 02-reconcile-profiles -> s6-rc services -> CMD
+set -e
+
+RESTORE_SCRIPT="/opt/data/restore-config.sh"
+
+if [ -f "$RESTORE_SCRIPT" ]; then
+    echo "[roosync-restore] Invoking $RESTORE_SCRIPT"
+    bash "$RESTORE_SCRIPT"
+    echo "[roosync-restore] Restore complete"
+else
+    echo "[roosync-restore] No $RESTORE_SCRIPT found — skipping (first boot or vanilla deploy)"
+fi
