@@ -220,8 +220,64 @@ else
     echo "  -> gh CLI already installed: $(gh --version 2>/dev/null | head -1)"
 fi
 
+# 7b. Install jq if missing
+echo "  -> Checking jq"
+if ! command -v jq &>/dev/null; then
+    echo "  -> Installing jq..."
+    apt-get update -qq 2>/dev/null && apt-get install -y -qq jq 2>/dev/null
+    jq --version 2>/dev/null && echo "  -> jq installed" || echo "  -> Warning: jq install failed"
+else
+    echo "  -> jq already installed: $(jq --version 2>/dev/null)"
+fi
+
+# 7c. gh auth login with GH_TOKEN (persists to /opt/data so it survives restarts)
+echo "  -> Configuring gh CLI auth"
+GH_TOKEN_VAL="${GH_TOKEN_CLUSTERMANAGER:-}"
+if [ -n "$GH_TOKEN_VAL" ]; then
+    # Persist gh config to /opt/data so it survives container restarts
+    mkdir -p /opt/data/.config/gh
+    ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
+    echo "$GH_TOKEN_VAL" | gh auth login --with-token 2>/dev/null
+    if gh auth status &>/dev/null; then
+        echo "  -> gh auth configured (token from GH_TOKEN_CLUSTERMANAGER)"
+    else
+        echo "  -> Warning: gh auth login failed"
+    fi
+else
+    # Try reusing existing auth if already in /opt/data/.config/gh
+    if [ -d "/opt/data/.config/gh" ]; then
+        ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
+        if gh auth status &>/dev/null; then
+            echo "  -> gh auth restored from /opt/data/.config/gh"
+        else
+            echo "  -> Warning: GH_TOKEN_CLUSTERMANAGER not set, gh auth not configured"
+        fi
+    else
+        echo "  -> Warning: GH_TOKEN_CLUSTERMANAGER not set, gh auth not configured"
+    fi
+fi
+
 # 8. Fix ownership
-chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" 2>/dev/null || true
+chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" "$DATA/.config" 2>/dev/null || true
+
+# 8b. Patch kanban SCHEMA_SQL — remove premature CREATE INDEX for session_id
+# Upstream bug: SCHEMA_SQL has CREATE INDEX on session_id before migration adds the column
+KANBAN_FILE="/opt/hermes/hermes_cli/kanban_db.py"
+if [ -f "$KANBAN_FILE" ]; then
+    echo "  -> Patching kanban SCHEMA_SQL (session_id index)"
+    # Comment out the premature index creation
+    if grep -q 'CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)' "$KANBAN_FILE"; then
+        sed -i 's|CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)|-- CREATE INDEX IF NOT EXISTS idx_tasks_session_id ON tasks(session_id)  -- PATCHED: migration creates it after ALTER TABLE|' "$KANBAN_FILE"
+        # Clear __pycache__ so patch takes effect
+        find /opt/hermes -name '*.pyc' -delete 2>/dev/null || true
+        find /opt/hermes -name '__pycache__' -type d -empty -delete 2>/dev/null || true
+        echo "  -> Kanban SCHEMA_SQL patched"
+    else
+        echo "  -> Kanban SCHEMA_SQL already patched (or upstream fixed)"
+    fi
+else
+    echo "  -> Warning: kanban_db.py not found at $KANBAN_FILE"
+fi
 
 # 9. Verify everything
 echo ""
@@ -307,6 +363,21 @@ command -v gh &>/dev/null && check "gh CLI" "OK" || check "gh CLI" "not installe
 
 # croniter
 /opt/hermes/.venv/bin/python3 -c 'import croniter' 2>/dev/null && check "croniter" "OK" || check "croniter" "not installed"
+
+# jq
+command -v jq &>/dev/null && check "jq" "OK" || check "jq" "not installed"
+
+# gh auth
+gh auth status &>/dev/null && check "gh auth" "OK" || check "gh auth" "not configured"
+
+# gh config persisted
+[ -d "/opt/data/.config/gh" ] && check "gh config persisted" "OK" || check "gh config persisted" "not found in /opt/data"
+
+# kanban patch
+if [ -f "$KANBAN_FILE" ]; then
+    KPATCH=$(grep -c 'PATCHED: migration creates it' "$KANBAN_FILE" || true)
+    [ "$KPATCH" -ge 1 ] && check "Kanban session_id patch" "OK" || check "Kanban session_id patch" "not applied"
+fi
 
 echo ""
 if [ "$FAIL" = "0" ]; then
