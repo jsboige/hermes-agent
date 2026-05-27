@@ -281,6 +281,29 @@ docker run -d --name hermes `
   hermes-agent:tini-backup-20260526 gateway run
 ```
 
+### Backup protocol
+
+**Auto-backup:** cont-init.d `012-roosync-backup` snapshots critical files on every boot (before restore). Stored in `/opt/data/backups/auto-YYYYMMDD-HHmmss.tar.gz` (max 3 rotated, ~20MB each).
+
+**Manual pre-rebuild backup:**
+```powershell
+.\roosync-cluster\scripts\hermes-backup.ps1 -Reason "description"
+```
+Stops container, tars full volume to `C:\Users\jsboi\hermes-backups\`, restarts container. Keeps last 5.
+
+**Post-op verification:**
+```powershell
+.\roosync-cluster\scripts\hermes-verify.ps1
+```
+12 checks: gateway process, Telegram connected, config/env symlinks, model, MCPs, cron jobs, kanban writable, gh auth, MCP health.
+
+**Restore from backup:**
+```powershell
+docker stop hermes
+docker run --rm -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes -v C:\Users\jsboi\hermes-backups:/backups alpine tar -xzf /backups/hermes-XXXXXX.tar.gz -C /opt/data/
+docker start hermes
+```
+
 ### z.ai provider (CRITICAL)
 
 Use NATIVE z.ai (`provider: "zai"`, built-in `/api/coding/paas/v4` endpoint). NEVER use `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic` — the Anthropic-compat translation layer causes MCP tool registry loss after compaction.

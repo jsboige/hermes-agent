@@ -186,6 +186,8 @@ RUN mkdir -p /etc/cont-init.d && \
     chmod +x /etc/cont-init.d/01-hermes-setup
 COPY --chmod=0755 docker/cont-init.d/015-supervise-perms /etc/cont-init.d/015-supervise-perms
 COPY --chmod=0755 docker/cont-init.d/02-reconcile-profiles /etc/cont-init.d/02-reconcile-profiles
+# RooSync: auto-backup critical files before restore
+COPY --chmod=0755 docker/cont-init.d/012-roosync-backup /etc/cont-init.d/012-roosync-backup
 # RooSync: restore custom deployment config from persistent volume
 COPY --chmod=0755 docker/cont-init.d/013-roosync-restore /etc/cont-init.d/013-roosync-restore
 # Strip CRLF from cont-init.d scripts (Windows git checkout may introduce \r)

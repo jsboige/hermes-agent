@@ -260,6 +260,15 @@ fi
 # 8. Fix ownership
 chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" "$DATA/.config" "$DATA/kanban.db" "$DATA/kanban.db-wal" "$DATA/kanban.db-shm" 2>/dev/null || true
 
+# 8a. Symlink config files into hermes home (~/.hermes = $DATA/.hermes/)
+# Hermes reads config from ~/.hermes/ but restore writes to $DATA/ (volume root).
+HERMES_HOME="$DATA/.hermes"
+mkdir -p "$HERMES_HOME/cron" 2>/dev/null || true
+ln -sf "$DATA/config.yaml" "$HERMES_HOME/config.yaml" 2>/dev/null || true
+ln -sf "$DATA/.env" "$HERMES_HOME/.env" 2>/dev/null || true
+ln -sf "$DATA/.env.secrets" "$HERMES_HOME/.env.secrets" 2>/dev/null || true
+ln -sf "$DATA/cron/jobs.json" "$HERMES_HOME/cron/jobs.json" 2>/dev/null || true
+
 # 8b. Patch kanban SCHEMA_SQL — remove premature CREATE INDEX for session_id
 # Upstream bug: SCHEMA_SQL has CREATE INDEX on session_id before migration adds the column
 KANBAN_FILE="/opt/hermes/hermes_cli/kanban_db.py"
@@ -377,6 +386,55 @@ gh auth status &>/dev/null && check "gh auth" "OK" || check "gh auth" "not confi
 if [ -f "$KANBAN_FILE" ]; then
     KPATCH=$(grep -c 'PATCHED: migration creates it' "$KANBAN_FILE" || true)
     [ "$KPATCH" -ge 1 ] && check "Kanban session_id patch" "OK" || check "Kanban session_id patch" "not applied"
+fi
+
+# Symlinks hermes home (config must be visible from ~/.hermes/)
+SYMLINK_OK=0
+for f in config.yaml .env .env.secrets cron/jobs.json; do
+    TARGET="$DATA/.hermes/$f"
+    if [ -L "$TARGET" ]; then
+        LINK=$(readlink "$TARGET")
+        SYMLINK_OK=$((SYMLINK_OK + 1))
+    elif [ -f "$TARGET" ]; then
+        check "Symlink .hermes/$f" "FILE EXISTS (not symlink)"
+    else
+        check "Symlink .hermes/$f" "MISSING"
+    fi
+done
+[ "$SYMLINK_OK" -ge 4 ] && check "Symlinks hermes home ($SYMLINK_OK/4)" "OK" || check "Symlinks hermes home" "only $SYMLINK_OK/4"
+
+# Kanban DB writable
+KDB="$DATA/.hermes/kanban.db"
+if [ -f "$KDB" ] || [ -L "$KDB" ]; then
+    REAL_KDB=$(readlink -f "$KDB" 2>/dev/null || echo "$KDB")
+    KW=$(/opt/hermes/.venv/bin/python3 -c "
+import sqlite3
+conn=sqlite3.connect('$REAL_KDB')
+conn.execute('CREATE TABLE IF NOT EXISTS _write_test (id INTEGER)')
+conn.execute('DROP TABLE IF EXISTS _write_test')
+conn.commit()
+conn.close()
+print('OK')" 2>/dev/null || echo "FAIL: not writable as hermes")
+    check "Kanban DB writable" "$KW"
+else
+    check "Kanban DB" "not found (will be created on first use)"
+fi
+
+# Gateway Telegram state (check after process has had time to start)
+sleep 3
+GS_FILE=""
+for gf in "$DATA/.hermes/gateway_state.json" "$DATA/gateway_state.json"; do
+    if [ -f "$gf" ]; then GS_FILE="$gf"; break; fi
+done
+if [ -n "$GS_FILE" ]; then
+    GS=$(python3 -c "
+import json
+d=json.load(open('$GS_FILE'))
+tg=d.get('platforms',{}).get('telegram',{}).get('state','unknown')
+print(tg)" 2>/dev/null || echo "parse_error")
+    [[ "$GS" == *"connected"* ]] && check "Telegram state" "OK" || check "Telegram state" "$GS"
+else
+    check "Gateway state" "not yet written (normal during boot)"
 fi
 
 echo ""

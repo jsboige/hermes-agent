@@ -1,0 +1,45 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# Auto-backup critical files on every boot (before restore script runs).
+# Stores in /opt/data/backups/auto-YYYYMMDD-HHmmss.tar.gz, max 3 rotated.
+set -e
+
+DATA="/opt/data"
+BACKUP_DIR="$DATA/backups"
+MAX_BACKUPS=3
+
+mkdir -p "$BACKUP_DIR" 2>/dev/null || true
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+BACKUP_FILE="$BACKUP_DIR/auto-$TIMESTAMP.tar.gz"
+
+# Backup critical files only (~20MB, not the full 2.6GB volume)
+tar -czf "$BACKUP_FILE" \
+    --exclude='.npm' \
+    --exclude='logs' \
+    --exclude='cache' \
+    --exclude='*.pyc' \
+    --exclude='sandboxes' \
+    --exclude='backups' \
+    -C "$DATA" \
+    .env .env.secrets config.yaml SOUL.md cron/jobs.json \
+    kanban.db kanban.db-wal kanban.db-shm \
+    2>/dev/null || true
+
+# Backup hermes home subdirectory
+tar -czf "$BACKUP_FILE" \
+    --exclude='*.pyc' \
+    --exclude='logs' \
+    --exclude='sandboxes' \
+    -C "$DATA" \
+    .hermes/state.db .hermes/sessions .hermes/skills .hermes/memories \
+    .hermes/config.yaml .hermes/.env \
+    2>/dev/null || true
+
+# Rotation — keep last N auto backups
+COUNT=$(ls -1 "$BACKUP_DIR"/auto-*.tar.gz 2>/dev/null | wc -l)
+if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
+    ls -1t "$BACKUP_DIR"/auto-*.tar.gz | tail -n +$((MAX_BACKUPS + 1)) | xargs rm -f 2>/dev/null || true
+fi
+
+SIZE=$(du -sh "$BACKUP_FILE" 2>/dev/null | cut -f1 || echo "?")
+echo "[roosync-backup] Auto backup: $BACKUP_FILE ($SIZE)"
