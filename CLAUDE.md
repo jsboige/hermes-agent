@@ -174,7 +174,7 @@ Three config loaders exist — know which one you're in:
 
 ### Container
 
-- **Image:** `hermes-agent:s6-20260526` (local build from fork, NOT upstream pull)
+- **Image:** `hermes-agent:s6-20260528` (local build from fork, NOT upstream pull)
 - **PID 1:** `s6-svscan` (s6-overlay v3.2.3.0, replaces old tini/gosu)
 - **User:** `hermes` (UID 10000) via `s6-setuidgid`
 - **Volume:** `C:\Users\jsboi\.hermes` → `/opt/data` (persistent across rebuilds)
@@ -187,7 +187,7 @@ docker run -d --name hermes `
   --restart unless-stopped `
   -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes `
   -p 9120:9119 `
-  hermes-agent:s6-20260526 gateway run
+  hermes-agent:s6-20260528 gateway run
 ```
 
 No `-e` flags needed — all secrets come from `/opt/data/.env.secrets` loaded by the restore script.
