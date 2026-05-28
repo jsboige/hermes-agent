@@ -159,11 +159,11 @@ EOF
 else
     echo "  -> MCP proxy (192.168.0.47:9090) unreachable — using local fallback"
     # Patch roo-state-manager .env for container mode
-    # GDrive is on this machine but Docker can't mount virtual drives — disable
+    # GDrive virtual drive can't be Docker-mounted — use local copy at C:\Users\jsboi\roosync-local
     # Qdrant is on ai-01 (down) — disable to prevent FATAL crash
     if [ -f /opt/roo-state-manager/.env ]; then
         echo "  -> Patching /opt/roo-state-manager/.env for container mode"
-        sed -i 's|^ROOSYNC_SHARED_PATH=.*|ROOSYNC_SHARED_PATH=|' /opt/roo-state-manager/.env
+        sed -i 's|^ROOSYNC_SHARED_PATH=.*|ROOSYNC_SHARED_PATH=/opt/gdrive/shared-state|' /opt/roo-state-manager/.env
         sed -i 's|^QDRANT_URL=.*|QDRANT_URL=http://localhost:1|' /opt/roo-state-manager/.env
         # Keep ROOSYNC_AUTO_SYNC=true — dashboard/messages work in-memory without GDrive
     fi
