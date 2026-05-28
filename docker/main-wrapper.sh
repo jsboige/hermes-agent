@@ -21,6 +21,16 @@ set -e
 export HOME="/opt/data"
 
 cd /opt/data
+
+# Load persistent .env (tokens, API keys) so they're available to the gateway
+# and its child processes (cron terminal tool, gh CLI calls).
+if [ -f /opt/data/.env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . /opt/data/.env
+    set +a
+fi
+
 # shellcheck disable=SC1091
 . /opt/hermes/.venv/bin/activate
 

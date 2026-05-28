@@ -257,10 +257,23 @@ else
     fi
 fi
 
-# 8. Fix ownership
+# 8. Inject secrets into s6 container environment so they're available
+# to the CMD (main-wrapper.sh) via with-contenv, and thus to cron terminal tool.
+S6_ENV="/run/s6/container_environment"
+if [ -d "$S6_ENV" ]; then
+    for var in GLM_API_KEY TELEGRAM_BOT_TOKEN GH_TOKEN_CLUSTERMANAGER GH_TOKEN_JSBOIGEEPITA GH_TOKEN_JSBOIGE GH_TOKEN MCP_AUTH_TOKEN WHISPER_BEARER_TOKEN; do
+        val="${!var:-}"
+        if [ -n "$val" ]; then
+            printf '%s' "$val" > "$S6_ENV/$var"
+        fi
+    done
+    echo "  -> Secrets injected into s6 container environment"
+fi
+
+# 8a. Fix ownership
 chown hermes:hermes "$DATA/config.yaml" "$DATA/.env" "$DATA/cron/jobs.json" "$DATA/SOUL.md" "$DATA/.config" "$DATA/kanban.db" "$DATA/kanban.db-wal" "$DATA/kanban.db-shm" 2>/dev/null || true
 
-# 8a. Symlink config files into hermes home (~/.hermes = $DATA/.hermes/)
+# 8b. Symlink config files into hermes home (~/.hermes = $DATA/.hermes/)
 # Hermes reads config from ~/.hermes/ but restore writes to $DATA/ (volume root).
 HERMES_HOME="$DATA/.hermes"
 mkdir -p "$HERMES_HOME/cron" 2>/dev/null || true
