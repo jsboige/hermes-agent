@@ -218,12 +218,31 @@ No `-e` flags needed — all secrets come from `/opt/data/.env.secrets` loaded b
 2. Set model to `glm-5-turbo` with `provider: "zai"`
 3. Remove duplicate `provider: "auto"` and OpenRouter `base_url` contamination
 4. Append RooSync deployment config (auxiliary providers, STT, MCP servers, approvals)
-5. Write `/opt/data/.env` with all tokens (GLM, Telegram, GitHub)
-6. Fix `jobs.json` format (list→dict, schedule normalization, remove toolset restrictions)
-7. Install `croniter`, `gh` CLI, `jq`
-8. Configure `gh auth` (persisted to `/opt/data/.config/gh`)
-9. Patch kanban `SCHEMA_SQL` (session_id index before migration)
-10. Run 21 verification checks (PASS/FAIL)
+5. **MCP auto-detection**: probe `192.168.0.47:9090` (ai-01 proxy). If unreachable, use local fallback (see below)
+6. Write `/opt/data/.env` with all tokens (GLM, Telegram, GitHub)
+7. Fix `jobs.json` format (list→dict, schedule normalization, remove toolset restrictions)
+8. Install `croniter`, `gh` CLI, `jq`
+9. Configure `gh auth` (persisted to `/opt/data/.config/gh`)
+10. Patch kanban `SCHEMA_SQL` (session_id index before migration)
+11. Run verification checks (PASS/FAIL)
+
+### Local MCP proxy (when ai-01 is down)
+
+When ai-01 (`192.168.0.47:9090`) is unreachable, the restore script activates local MCP infrastructure:
+
+| Server | Transport | Details |
+|--------|-----------|---------|
+| roo-state-manager | stdio direct | Volume-mounted from roo-extensions, `.env` patched (GDrive/Qdrant disabled), `index.js` patched (FATAL → degrade) |
+| sk-agent | mcp-remote via proxy | `host.docker.internal:9092/sk-agent/mcp` |
+| searxng | mcp-remote via proxy | `host.docker.internal:9092/searxng/mcp` |
+
+**Local proxy container:** `myia-mcp-proxy` (TBXark Go proxy, port 9092). Config: `roosync-cluster/docker/mcp-proxy/config.json`, compose: `roosync-cluster/docker/docker-compose.yml`.
+
+**Container patches applied by restore script:**
+- `/opt/roo-state-manager/.env`: `ROOSYNC_SHARED_PATH=` (empty), `QDRANT_URL=http://localhost:1`, `ROOSYNC_AUTO_SYNC=false`
+- `/opt/roo-state-manager/build/index.js`: unhandledRejection handler patched to `return` instead of `process.exit(1)` — prevents FATAL crash when Qdrant is unreachable
+
+**Volume mount:** roo-state-manager is mounted as `rw` (not `ro`) to allow `.env` patching.
 
 ### 3 Windows patches (MUST re-apply after upstream sync)
 
