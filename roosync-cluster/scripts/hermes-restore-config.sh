@@ -106,8 +106,27 @@ stt:
     model: "whisper-1"
     base_url: "https://whisper-api.myia.io/v1"
     api_key: "${STT_API_KEY}"
+EOF
 
-# MCP servers — LAN direct (bypass IIS ARR pool issues on po-2023)
+# 3b. MCP servers — detect if ai-01 proxy is available, fallback to local
+MCP_PROXY_UP=false
+if command -v curl &>/dev/null; then
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+       "http://192.168.0.47:9090/sk-agent/mcp" \
+       -H "Authorization: Bearer ${MCP_AUTH}" \
+       -H "Content-Type: application/json" \
+       -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
+       --connect-timeout 5 --max-time 10 2>/dev/null || true)
+    case "$HTTP_CODE" in
+        200|401|403|405) MCP_PROXY_UP=true ;;
+    esac
+fi
+
+if [ "$MCP_PROXY_UP" = true ]; then
+    echo "  -> MCP proxy (192.168.0.47:9090) reachable — using remote"
+    cat >> "$DATA/config.yaml" << EOF
+
+# MCP servers — LAN direct to ai-01 proxy
 mcp_servers:
   roo-state-manager:
     command: npx
@@ -136,8 +155,61 @@ mcp_servers:
       - --allow-http
       - --header
       - "Authorization:Bearer ${MCP_AUTH}"
+EOF
+else
+    echo "  -> MCP proxy (192.168.0.47:9090) unreachable — using local fallback"
+    # Patch roo-state-manager .env to disable GDrive/Qdrant for container mode
+    if [ -f /opt/roo-state-manager/.env ]; then
+        echo "  -> Patching /opt/roo-state-manager/.env for container mode"
+        sed -i 's|^ROOSYNC_SHARED_PATH=.*|ROOSYNC_SHARED_PATH=|' /opt/roo-state-manager/.env
+        sed -i 's|^QDRANT_URL=.*|QDRANT_URL=http://localhost:1|' /opt/roo-state-manager/.env
+        sed -i 's|^ROOSYNC_AUTO_SYNC=.*|ROOSYNC_AUTO_SYNC=false|' /opt/roo-state-manager/.env
+    fi
+    # Patch unhandled rejection handler to NOT crash on Qdrant/fetch errors
+    # The server's process.on('unhandledRejection') calls process.exit(1) for any
+    # error that isn't IO or shared-path related. Qdrant fetch failures trigger this.
+    if [ -f /opt/roo-state-manager/build/index.js ]; then
+        echo "  -> Patching index.js unhandledRejection handler (container-safe)"
+        sed -i "s/logger.error('Unhandled rejection (FATAL) at:', { promise: String(promise), \.\.\.reasonInfo });/logger.error('Unhandled rejection (degraded, container mode):', { promise: String(promise), ...reasonInfo });/" /opt/roo-state-manager/build/index.js
+        sed -i "/Unhandled rejection (degraded, container mode)/{n;s/process.exit(1);/return; \/\/ patched: don\\'t crash/}" /opt/roo-state-manager/build/index.js
+    fi
+    cat >> "$DATA/config.yaml" << EOF
+
+# MCP servers — LOCAL fallback (ai-01 proxy down)
+# roo-state-manager: stdio direct (volume-mounted, .env patched for container)
+# sk-agent + searxng: via local mcp-proxy container on port 9092
+mcp_servers:
+  roo-state-manager:
+    command: node
+    args:
+      - /opt/roo-state-manager/mcp-wrapper.cjs
+    env:
+      NODE_PATH: /opt/roo-state-manager/node_modules
+      DEFAULT_WORKSPACE: /opt/data
+  sk-agent:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://host.docker.internal:9092/sk-agent/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer ${MCP_AUTH}"
+  searxng:
+    command: npx
+    args:
+      - -y
+      - mcp-remote
+      - http://host.docker.internal:9092/searxng/mcp
+      - --allow-http
+      - --header
+      - "Authorization:Bearer ${MCP_AUTH}"
+EOF
+fi
 
 # Auto-approve for gateway cron jobs (no user to approve in gateway mode)
+cat >> "$DATA/config.yaml" << EOF
+
 approvals:
   mode: off
   cron_mode: approve

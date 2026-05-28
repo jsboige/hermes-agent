@@ -1,0 +1,37 @@
+{
+  "mcpProxy": {
+    "baseURL": "http://localhost:9090",
+    "addr": ":9090",
+    "name": "MyIA MCP Tools (po-2026 local)",
+    "version": "1.0.0",
+    "type": "streamable-http",
+    "options": {
+      "panicIfInvalid": false,
+      "logEnabled": true,
+      "authTokens": ["ad28ecc74e0963765de2e69d2f75bb542b3b65e378c9b306e8eeeeb98b15906b"]
+    }
+  },
+  "mcpServers": {
+    "searxng": {
+      "command": "npx",
+      "args": ["-y", "mcp-searxng"],
+      "env": {
+        "SEARXNG_URL": "https://search.myia.io/"
+      }
+    },
+    "sk-agent": {
+      "command": "python",
+      "args": ["/opt/sk-agent/sk_agent.py"],
+      "env": {
+        "SK_AGENT_CONFIG": "/opt/sk-agent/sk_agent_config.json"
+      }
+    },
+    "roo-state-manager": {
+      "command": "node",
+      "args": ["/opt/roo-state-manager/mcp-wrapper.cjs"],
+      "env": {
+        "NODE_PATH": "/opt/roo-state-manager/node_modules"
+      }
+    }
+  }
+}

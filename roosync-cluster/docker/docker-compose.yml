@@ -1,0 +1,24 @@
+# Local MCP Proxy for po-2026
+# Replaces ai-01 MCP proxy when ai-01 is down
+#
+# Usage:
+#   cd roosync-cluster/docker
+#   docker compose up -d
+#   docker compose logs -f
+
+services:
+  mcp-proxy:
+    image: myia-mcp-proxy:latest
+    container_name: myia-mcp-proxy
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./mcp-proxy/config.json:/config/config.json:ro
+      - C:/dev/roo-extensions/mcps/internal/servers/sk-agent/sk_agent_config.json:/opt/sk-agent/sk_agent_config.json:ro
+      - C:/dev/roo-extensions/mcps/internal/servers/roo-state-manager:/opt/roo-state-manager:ro
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 60s
+    restart: unless-stopped
