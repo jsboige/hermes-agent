@@ -158,12 +158,14 @@ mcp_servers:
 EOF
 else
     echo "  -> MCP proxy (192.168.0.47:9090) unreachable — using local fallback"
-    # Patch roo-state-manager .env to disable GDrive/Qdrant for container mode
+    # Patch roo-state-manager .env for container mode
+    # GDrive is on this machine but Docker can't mount virtual drives — disable
+    # Qdrant is on ai-01 (down) — disable to prevent FATAL crash
     if [ -f /opt/roo-state-manager/.env ]; then
         echo "  -> Patching /opt/roo-state-manager/.env for container mode"
         sed -i 's|^ROOSYNC_SHARED_PATH=.*|ROOSYNC_SHARED_PATH=|' /opt/roo-state-manager/.env
         sed -i 's|^QDRANT_URL=.*|QDRANT_URL=http://localhost:1|' /opt/roo-state-manager/.env
-        sed -i 's|^ROOSYNC_AUTO_SYNC=.*|ROOSYNC_AUTO_SYNC=false|' /opt/roo-state-manager/.env
+        # Keep ROOSYNC_AUTO_SYNC=true — dashboard/messages work in-memory without GDrive
     fi
     # Patch unhandled rejection handler to NOT crash on Qdrant/fetch errors
     # The server's process.on('unhandledRejection') calls process.exit(1) for any
