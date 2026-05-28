@@ -317,6 +317,17 @@ All 3 MCP servers connect via `mcp-remote` to `http://192.168.0.47:9090` (LAN di
 
 Auth: `Authorization: Bearer ${MCP_AUTH_TOKEN}` from `.env.secrets`.
 
+### MCP resilience (watchdog)
+
+**Root cause:** `MCPServerTask.run()` in `tools/mcp_tool.py` gives up after `_MAX_RECONNECT_RETRIES = 5` attempts (line 1648). Once the task returns, the bridge is dead until the gateway process restarts.
+
+**Watchdog:** `roosync-cluster/scripts/hermes-mcp-watchdog.ps1` runs every 15 min via Windows Scheduled Task. Recovery escalation:
+
+1. **Stage 1:** `SIGUSR1` to gateway PID — graceful restart, preserves container state
+2. **Stage 2:** `docker restart` — full container reboot (last resort)
+
+**Backoff:** Exponential (5, 10, 15... up to 60 min) between recovery attempts. Max 10 consecutive failures before giving up. Counter resets on healthy check. Prevents restart loops (incident 2026-05-11: 10+ restarts in 4h).
+
 ### Cluster ASR
 
 `https://whisper-api.myia.io/v1` — self-hosted Whisper on po-2023. Auth via `WHISPER_BEARER_TOKEN` from `.env.secrets`.

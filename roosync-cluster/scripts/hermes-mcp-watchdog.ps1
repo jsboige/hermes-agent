@@ -1,13 +1,17 @@
 <#
 .SYNOPSIS
-    Hermes MCP bridge watchdog — restarts the container when mcp-remote bridges are missing.
+    Hermes MCP bridge watchdog — recovers from transient MCP connection loss.
 
 .DESCRIPTION
     Checks that all 3 expected MCP bridges (roo-state-manager, sk-agent, searxng)
     are running inside the Hermes container. If any bridge is missing and the upstream
-    proxy is reachable, restarts the container.
+    proxy is reachable, triggers recovery in escalating stages:
 
-    Also checks for persistent MCP errors in container logs as a secondary signal.
+      Stage 1: SIGUSR1 to gateway process (graceful restart, preserves container)
+      Stage 2: docker restart (full container restart, last resort)
+
+    Includes exponential backoff to prevent restart loops (incident 2026-05-11:
+    10+ restarts in 4 hours because consecutive threshold was too low).
 
 .NOTES
     Deploy as a Windows Scheduled Task on po-2026:
@@ -27,8 +31,10 @@ param(
     [string]$McpProxyUrl = "http://192.168.0.47:9090/roo-state-manager/mcp",
     [string]$LogPath = "$PSScriptRoot\..\logs\mcp-watchdog.log",
     [int]$ContainerAgeThresholdMinutes = 5,
-    [int]$ConsecutiveFailThreshold = 3,
-    [string]$StateFile = "$PSScriptRoot\..\logs\mcp-watchdog-state.json"
+    [string]$StateFile = "$PSScriptRoot\..\logs\mcp-watchdog-state.json",
+    # New params for exponential backoff
+    [int]$MaxConsecutiveFailures = 10,
+    [int]$MaxBackoffMinutes = 60
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,6 +47,21 @@ function Write-Log {
     $logDir = Split-Path $LogPath -Parent
     if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     Add-Content -Path $LogPath -Value $entry -Encoding UTF8
+}
+
+function Get-State {
+    if (Test-Path $StateFile) {
+        try {
+            return Get-Content $StateFile -Raw | ConvertFrom-Json
+        }
+        catch { }
+    }
+    return @{ ConsecutiveFailures = 0; LastRecovery = $null; LastFailure = $null }
+}
+
+function Set-State {
+    param([hashtable]$State)
+    $State | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
 }
 
 # --- Check 1: Container running ---
@@ -65,10 +86,8 @@ foreach ($name in @("roo-state-manager", "sk-agent", "searxng")) {
 
 if ($bridgeCount -eq $ExpectedBridges) {
     Write-Log "All $ExpectedBridges MCP bridges active." "DEBUG"
-    # Reset consecutive failure counter when healthy
-    if (Test-Path $StateFile) {
-        @{ ConsecutiveFailures = 0; LastCheck = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ') } | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
-    }
+    # Reset failure counter on healthy state
+    Set-State @{ ConsecutiveFailures = 0; LastRecovery = (Get-State).LastRecovery; LastFailure = $null }
     exit 0
 }
 
@@ -95,25 +114,9 @@ if (-not $proxyReachable) {
     exit 0
 }
 
-# --- Check 4: Persistent MCP errors in logs (secondary signal) ---
-$since = (Get-Date).AddMinutes(-$LogWindowMinutes).ToString("yyyy-MM-ddTHH:mm:ss")
-try {
-    $logs = docker logs $ContainerName --since $since --tail 200 2>&1
-}
-catch {
-    Write-Log "Failed to read container logs: $($_.Exception.Message)" "WARN"
-}
-
-$mcpErrors = ($logs | Where-Object {
-    $_ -match "MCP.*(fail|error|unreachable|Missing session|ClosedResource|Fatal error)" -and
-    $_ -notmatch "circuit breaker opened.*triggering reconnect"
-})
-$errorCount = ($mcpErrors | Measure-Object).Count
-
-# --- Check 5: Container age — skip if recently started (bridges still connecting) ---
+# --- Check 4: Container age — skip if recently started ---
 $startedAtRaw = docker inspect --format='{{.State.StartedAt}}' $ContainerName 2>$null
 if ($LASTEXITCODE -eq 0 -and $startedAtRaw) {
-    # Parse ISO 8601 timestamp (Docker returns nanosecond precision)
     $startedAtStr = $startedAtRaw -replace '\.\d+Z$', 'Z'
     $startedAt = [DateTimeOffset]::Parse($startedAtStr).UtcDateTime
     $containerAge = ((Get-Date).ToUniversalTime() - $startedAt).TotalMinutes
@@ -123,34 +126,75 @@ if ($LASTEXITCODE -eq 0 -and $startedAtRaw) {
     }
 }
 
-# --- Check 6: Consecutive failure tracking — require N consecutive failures before restarting ---
-$consecutiveFailures = 0
-if (Test-Path $StateFile) {
+# --- Check 5: Exponential backoff — don't hammer restarts ---
+$state = Get-State
+$consecutiveFailures = [int]$state.ConsecutiveFailures
+$lastRecovery = $state.LastRecovery
+
+# Calculate backoff: 5, 10, 15, 20, ..., up to MaxBackoffMinutes
+$backoffMinutes = [Math]::Min(($consecutiveFailures + 1) * 5, $MaxBackoffMinutes)
+
+if ($lastRecovery) {
     try {
-        $state = Get-Content $StateFile -Raw | ConvertFrom-Json
-        $consecutiveFailures = [int]$state.ConsecutiveFailures
+        $lastRecoveryTime = [DateTimeOffset]::Parse($lastRecovery).UtcDateTime
+        $timeSinceRecovery = ((Get-Date).ToUniversalTime() - $lastRecoveryTime).TotalMinutes
+        if ($timeSinceRecovery -lt $backoffMinutes) {
+            Write-Log "Backoff active: ${backoffMinutes}min required, only $($timeSinceRecovery.ToString('F1'))min since last recovery. Waiting." "WARN"
+            Set-State @{
+                ConsecutiveFailures = ($consecutiveFailures + 1)
+                LastRecovery        = $lastRecovery
+                LastFailure         = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+            }
+            exit 0
+        }
     }
-    catch { $consecutiveFailures = 0 }
+    catch { }
 }
 
-$consecutiveFailures++
-$stateData = @{ ConsecutiveFailures = $consecutiveFailures; LastCheck = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ') }
-$stateData | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
-
-if ($consecutiveFailures -lt $ConsecutiveFailThreshold) {
-    Write-Log "Missing $($missingBridges.Count) bridge(s), but only $consecutiveFailures/$ConsecutiveFailThreshold consecutive failures. Waiting." "WARN"
+# Hard limit: stop trying after MaxConsecutiveFailures
+if ($consecutiveFailures -ge $MaxConsecutiveFailures) {
+    Write-Log "Max consecutive failures ($MaxConsecutiveFailures) reached. Giving up until next healthy check resets counter." "ERROR"
     exit 0
 }
 
-# --- Decision: restart only after N consecutive failures, proxy reachable, and container is old enough ---
-Write-Log "Proxy reachable, missing $($missingBridges.Count) bridge(s) for $consecutiveFailures consecutive checks, $errorCount MCP errors. Restarting." "ERROR"
+# --- Recovery Stage 1: SIGUSR1 to gateway process ---
+$recovered = $false
 
-docker restart $ContainerName
-if ($LASTEXITCODE -eq 0) {
-    Write-Log "Container '$ContainerName' restarted successfully. Bridges should reconnect within 30s." "INFO"
-    # Reset failure counter on successful restart
-    @{ ConsecutiveFailures = 0; LastCheck = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ') } | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
+# Find the gateway PID
+$gatewayPid = $null
+$gatewayProc = docker exec $ContainerName ps aux 2>$null | Select-String "hermes gateway run"
+if ($gatewayProc -and $gatewayProc -match '^\S+\s+(\d+)') {
+    $gatewayPid = $Matches[1]
 }
-else {
-    Write-Log "Failed to restart container '$ContainerName'." "ERROR"
+
+if ($gatewayPid) {
+    Write-Log "Stage 1: Sending SIGUSR1 to gateway PID $gatewayPid (graceful restart)." "INFO"
+    docker exec $ContainerName kill -SIGUSR1 $gatewayPid 2>$null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "SIGUSR1 sent. Gateway will restart in-place (no container reboot)." "INFO"
+        $recovered = $true
+    }
+    else {
+        Write-Log "SIGUSR1 failed. Escalating to Stage 2." "WARN"
+    }
+}
+
+# --- Recovery Stage 2: docker restart (last resort) ---
+if (-not $recovered) {
+    Write-Log "Stage 2: docker restart '$ContainerName' (full container reboot)." "ERROR"
+    docker restart $ContainerName
+    if ($LASTEXITCODE -eq 0) {
+        Write-Log "Container '$ContainerName' restarted successfully." "INFO"
+        $recovered = $true
+    }
+    else {
+        Write-Log "Failed to restart container '$ContainerName'." "ERROR"
+    }
+}
+
+# Update state
+Set-State @{
+    ConsecutiveFailures = ($consecutiveFailures + 1)
+    LastRecovery        = if ($recovered) { Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ' } else { $lastRecovery }
+    LastFailure         = Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ'
 }
