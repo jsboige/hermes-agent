@@ -158,35 +158,44 @@ mcp_servers:
 EOF
 else
     echo "  -> MCP proxy (192.168.0.47:9090) unreachable — using local fallback"
-    # Patch roo-state-manager .env for container mode
-    # GDrive virtual drive can't be Docker-mounted — use local copy at C:\Users\jsboi\roosync-local
+    # CRITICAL: Copy roo-state-manager to /tmp BEFORE patching.
+    # The volume mount is rw — sed -i on /opt/roo-state-manager would corrupt
+    # the host .env (see regression #560). We patch ONLY the copy.
+    # node_modules is a symlink to the host install, so we use cp -L to
+    # dereference it and avoid dangling links in /tmp.
+    echo "  -> Copying roo-state-manager to /tmp (isolated from host)"
+    rm -rf /tmp/roo-state-manager 2>/dev/null
+    cp -rL /opt/roo-state-manager /tmp/roo-state-manager
+
+    # Patch the COPY (.env) for container mode
+    # GDrive virtual drive can't be Docker-mounted — clear shared path
     # Qdrant is on ai-01 (down) — disable to prevent FATAL crash
-    if [ -f /opt/roo-state-manager/.env ]; then
-        echo "  -> Patching /opt/roo-state-manager/.env for container mode"
-        sed -i 's|^ROOSYNC_SHARED_PATH=.*|ROOSYNC_SHARED_PATH=/opt/gdrive/shared-state|' /opt/roo-state-manager/.env
-        sed -i 's|^QDRANT_URL=.*|QDRANT_URL=http://localhost:1|' /opt/roo-state-manager/.env
+    if [ -f /tmp/roo-state-manager/.env ]; then
+        echo "  -> Patching /tmp/roo-state-manager/.env for container mode"
+        sed -i 's|^ROOSYNC_SHARED_PATH=.*|ROOSYNC_SHARED_PATH=|' /tmp/roo-state-manager/.env
+        sed -i 's|^QDRANT_URL=.*|QDRANT_URL=http://localhost:1|' /tmp/roo-state-manager/.env
         # Keep ROOSYNC_AUTO_SYNC=true — dashboard/messages work in-memory without GDrive
     fi
-    # Patch unhandled rejection handler to NOT crash on Qdrant/fetch errors
+    # Patch the COPY (index.js) — unhandled rejection handler to NOT crash on Qdrant/fetch errors
     # The server's process.on('unhandledRejection') calls process.exit(1) for any
     # error that isn't IO or shared-path related. Qdrant fetch failures trigger this.
-    if [ -f /opt/roo-state-manager/build/index.js ]; then
-        echo "  -> Patching index.js unhandledRejection handler (container-safe)"
-        sed -i "s/logger.error('Unhandled rejection (FATAL) at:', { promise: String(promise), \.\.\.reasonInfo });/logger.error('Unhandled rejection (degraded, container mode):', { promise: String(promise), ...reasonInfo });/" /opt/roo-state-manager/build/index.js
-        sed -i "/Unhandled rejection (degraded, container mode)/{n;s/process.exit(1);/return; \/\/ patched: don\\'t crash/}" /opt/roo-state-manager/build/index.js
+    if [ -f /tmp/roo-state-manager/build/index.js ]; then
+        echo "  -> Patching /tmp copy: index.js unhandledRejection handler (container-safe)"
+        sed -i "s/logger.error('Unhandled rejection (FATAL) at:', { promise: String(promise), \.\.\.reasonInfo });/logger.error('Unhandled rejection (degraded, container mode):', { promise: String(promise), ...reasonInfo });/" /tmp/roo-state-manager/build/index.js
+        sed -i "/Unhandled rejection (degraded, container mode)/{n;s/process.exit(1);/return; \/\/ patched: don\\'t crash/}" /tmp/roo-state-manager/build/index.js
     fi
     cat >> "$DATA/config.yaml" << EOF
 
 # MCP servers — LOCAL fallback (ai-01 proxy down)
-# roo-state-manager: stdio direct (volume-mounted, .env patched for container)
+# roo-state-manager: stdio direct (COPY in /tmp, patched for container — NEVER touches host)
 # sk-agent + searxng: via local mcp-proxy container on port 9092
 mcp_servers:
   roo-state-manager:
     command: node
     args:
-      - /opt/roo-state-manager/mcp-wrapper.cjs
+      - /tmp/roo-state-manager/mcp-wrapper.cjs
     env:
-      NODE_PATH: /opt/roo-state-manager/node_modules
+      NODE_PATH: /tmp/roo-state-manager/node_modules
       DEFAULT_WORKSPACE: /opt/data
   sk-agent:
     command: npx

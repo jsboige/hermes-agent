@@ -186,6 +186,8 @@ Three config loaders exist — know which one you're in:
 docker run -d --name hermes `
   --restart unless-stopped `
   -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes `
+  -v C:\dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
+  --add-host=host.docker.internal:host-gateway `
   -p 9120:9119 `
   hermes-agent:s6-20260528 gateway run
 ```
@@ -239,10 +241,11 @@ When ai-01 (`192.168.0.47:9090`) is unreachable, the restore script activates lo
 **Local proxy container:** `myia-mcp-proxy` (TBXark Go proxy, port 9092). Config: `roosync-cluster/docker/mcp-proxy/config.json`, compose: `roosync-cluster/docker/docker-compose.yml`.
 
 **Container patches applied by restore script:**
-- `/opt/roo-state-manager/.env`: `ROOSYNC_SHARED_PATH=` (empty), `QDRANT_URL=http://localhost:1`, `ROOSYNC_AUTO_SYNC=false`
-- `/opt/roo-state-manager/build/index.js`: unhandledRejection handler patched to `return` instead of `process.exit(1)` — prevents FATAL crash when Qdrant is unreachable
+- Restore script copies `/opt/roo-state-manager` → `/tmp/roo-state-manager` then patches the COPY only (never touches host volume — regression #560)
+- `/tmp/roo-state-manager/.env`: `ROOSYNC_SHARED_PATH=` (empty), `QDRANT_URL=http://localhost:1`
+- `/tmp/roo-state-manager/build/index.js`: unhandledRejection handler patched to `return` instead of `process.exit(1)` — prevents FATAL crash when Qdrant is unreachable
 
-**Volume mount:** roo-state-manager is mounted as `rw` (not `ro`) to allow `.env` patching.
+**Volume mount:** roo-state-manager is mounted as `ro` (read-only). The restore script copies to `/tmp/` before patching to prevent host `.env` corruption (#560).
 
 ### 3 Windows patches (MUST re-apply after upstream sync)
 
