@@ -185,12 +185,14 @@ Three config loaders exist — know which one you're in:
 ```powershell
 docker run -d --name hermes `
   --restart unless-stopped `
-  -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes `
+  -v C:\Users\jsboi\.hermes:/opt/data `
   -v C:\dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
   --add-host=host.docker.internal:host-gateway `
   -p 9120:9119 `
-  hermes-agent:s6-20260528 gateway run
+  hermes-agent:s6-sync-20260602 gateway run
 ```
+
+**NOTE:** Use PowerShell (not Git Bash) for `docker run` — Git Bash path conversion breaks `-v` mount targets.
 
 No `-e` flags needed — all secrets come from `/opt/data/.env.secrets` loaded by the restore script.
 
@@ -293,14 +295,16 @@ Plus modifications to `docker/main-wrapper.sh` (shebang + HOME override — see 
 ### Rollback
 
 ```powershell
-# If new image is broken, restore old tini-based container:
+# If new image is broken, restore previous image:
 docker stop hermes
 docker rm hermes
 docker run -d --name hermes `
   --restart unless-stopped `
-  -v C:\Users\jsboi\.hermes:C:\Users\jsboi\.hermes `
+  -v C:\Users\jsboi\.hermes:/opt/data `
+  -v C:\dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
+  --add-host=host.docker.internal:host-gateway `
   -p 9120:9119 `
-  hermes-agent:tini-backup-20260526 gateway run
+  hermes-agent:pre-sync-20260602 gateway run
 ```
 
 ### Backup protocol
