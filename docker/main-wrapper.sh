@@ -48,8 +48,11 @@ fi
 
 # Restore the original working directory before handing off to
 # the user's command so `hermes chat` starts in the Docker -w
-# directory, not /opt/data.
-cd "$_hermes_orig_cwd"
+# directory, not /opt/data.  Skip if the target is /root or
+# inaccessible to the hermes user (s6 starts with PWD=/root).
+if [ "$_hermes_orig_cwd" != "/root" ] && [ -d "$_hermes_orig_cwd" ]; then
+    cd "$_hermes_orig_cwd"
+fi
 
 if [ $# -eq 0 ]; then
     drop hermes
