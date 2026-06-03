@@ -111,3 +111,21 @@ These are **our files only** — they don't exist upstream, so they survive the 
 
 - `docker/cont-init.d/012-roosync-backup` — Auto-backup critical files on boot (before restore)
 - `docker/cont-init.d/013-roosync-restore` — Shim that invokes `/opt/data/restore-config.sh`
+
+---
+
+## 5. roosync-cluster/scripts/hermes-restore-config.sh — XDG_STATE_HOME + HOME in s6 env
+
+**Our file only** — doesn't exist upstream. Survives merge automatically.
+
+Key additions (search for `XDG_STATE_HOME`):
+
+1. In `.env` section (~line 237): `XDG_STATE_HOME=/opt/data/.local/state`
+2. In s6 env injection section (~line 356-361):
+
+   ```bash
+   printf '/opt/data/.local/state' > "$S6_ENV/XDG_STATE_HOME"
+   printf '/opt/data' > "$S6_ENV/HOME"
+   ```
+
+**Why:** `gateway/status.py` line 68 uses `Path.home()` when `XDG_STATE_HOME` is unset. s6-overlay injects `HOME=/root` → lock files under `/root/.local/state/` → Permission denied for hermes user. Setting both in s6 container environment ensures `with-contenv` scripts get the right paths.
