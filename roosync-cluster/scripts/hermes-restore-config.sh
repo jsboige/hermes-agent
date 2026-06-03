@@ -384,6 +384,13 @@ else
     echo "  -> Warning: kanban_db.py not found at $KANBAN_FILE"
 fi
 
+# 8b. Fix /root permissions for hermes user
+# The gateway drops to hermes (UID 10000) via s6-setuidgid, but Python's
+# os.path.expanduser('~') and various library calls resolve to /root when
+# HOME is inherited from the Docker env. /root is 700 by default (Debian),
+# causing Permission denied on terminal, file, and browser tools.
+chmod 755 /root
+
 # 9. Verify everything
 echo ""
 echo "=== VERIFICATION ==="
