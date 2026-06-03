@@ -234,6 +234,9 @@ TELEGRAM_GROUP_ALLOWED_USERS=6541428999
 TELEGRAM_HOME_CHANNEL=-1003904676273
 GATEWAY_ALLOW_ALL_USERS=false
 
+# XDG — prevent gateway-locks from landing in /root/.local/state
+XDG_STATE_HOME=/opt/data/.local/state
+
 # z.ai / GLM provider
 GLM_API_KEY=${GLM_API_KEY:-}
 GLM_BASE_URL=${GLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
@@ -350,7 +353,12 @@ if [ -d "$S6_ENV" ]; then
             printf '%s' "$val" > "$S6_ENV/$var"
         fi
     done
-    echo "  -> Secrets injected into s6 container environment"
+    # XDG_STATE_HOME: prevent gateway-locks from landing in /root/.local/state
+    # (regression from s6-overlay HOME=/root in container_environment)
+    printf '/opt/data/.local/state' > "$S6_ENV/XDG_STATE_HOME"
+    # Fix HOME to point at the persistent volume instead of /root
+    printf '/opt/data' > "$S6_ENV/HOME"
+    echo "  -> Secrets + XDG_STATE_HOME + HOME injected into s6 container environment"
 fi
 
 # 8a. Fix ownership
