@@ -234,6 +234,10 @@ TELEGRAM_GROUP_ALLOWED_USERS=6541428999
 TELEGRAM_HOME_CHANNEL=-1003904676273
 GATEWAY_ALLOW_ALL_USERS=false
 
+# HOME — prevent subprocess/terminal tools from resolving to /root
+# (s6-overlay injects HOME=/root; load_dotenv restores this before each cron run)
+HOME=/opt/data
+
 # XDG — prevent gateway-locks from landing in /root/.local/state
 XDG_STATE_HOME=/opt/data/.local/state
 
