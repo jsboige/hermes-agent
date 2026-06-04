@@ -255,6 +255,7 @@ RUN find /etc/cont-init.d -type f -exec sed -i 's/\r$//' {} +
 # ---------- Runtime ----------
 ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_HOME=/opt/data
+ENV HOME=/opt/data
 
 # `docker exec` privilege-drop shim. When operators run
 # `docker exec <c> hermes ...` they default to root, and any file the
