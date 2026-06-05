@@ -391,11 +391,16 @@ class BaseEnvironment(ABC):
                 self.cwd,
             )
         except Exception as exc:
+            import traceback as _tb
+            _tb_str = _tb.format_exc()
             logger.warning(
-                "init_session failed (session=%s): %s — "
-                "falling back to bash -l per command",
+                "init_session failed (session=%s, cwd=%s, HOME=%s): %s "
+                "- falling back to bash -l per command - TB: %s",
                 self._session_id,
+                self.cwd,
+                self.env.get("HOME", "N/A") if self.env else "no-env",
                 exc,
+                _tb_str,
             )
             self._snapshot_ready = False
 

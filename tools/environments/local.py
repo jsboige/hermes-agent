@@ -539,6 +539,26 @@ class LocalEnvironment(BaseEnvironment):
 
         _popen_cwd = self.cwd
 
+        # Guard: prevent PermissionError when cwd resolves to /root.
+        # In Docker containers with s6-overlay, the gateway runs as a non-root
+        # user (e.g. UID 10000) but HOME may transiently resolve to /root.
+        # subprocess.Popen(cwd="/root") fails with EACCES in the forked child
+        # (Python's _execute_child raises PermissionError: '/root'), even when
+        # /root has chmod 755 — the kernel denies chdir for non-owners in some
+        # Docker security contexts.  See incident 2026-06-05 (48h+ debugging).
+        if _popen_cwd and not _IS_WINDOWS:
+            _is_root_user = os.getuid() == 0
+            if not _is_root_user and _popen_cwd == "/root":
+                _fallback = os.environ.get("HERMES_HOME", "/tmp")
+                logger.warning(
+                    "cwd is /root but running as non-root user (UID %d); "
+                    "falling back to %s to prevent PermissionError",
+                    os.getuid(),
+                    _fallback,
+                )
+                _popen_cwd = _fallback
+                self.cwd = _fallback
+
         _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
 
         proc = subprocess.Popen(
