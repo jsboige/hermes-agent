@@ -1,5 +1,13 @@
 """Local execution environment — spawn-per-call with session snapshot."""
 
+# Module-load sentinel — proves this exact file was imported.
+import sys as _sys
+_logging = __import__('logging')
+_logging.getLogger(__name__).warning(
+    "HERMES-PATCH-v3: local.py loaded from %s (Python %s, PID %d)",
+    __file__, _sys.version, __import__('os').getpid(),
+)
+
 import logging
 import os
 import platform
@@ -539,7 +547,8 @@ class LocalEnvironment(BaseEnvironment):
 
         _popen_cwd = self.cwd
 
-        # Guard: prevent PermissionError when cwd resolves to /root.
+        # Guard: prevent PermissionError when cwd resolves to /root or any
+        # path owned by root that a non-root user cannot chdir into.
         # In Docker containers with s6-overlay, the gateway runs as a non-root
         # user (e.g. UID 10000) but HOME may transiently resolve to /root.
         # subprocess.Popen(cwd="/root") fails with EACCES in the forked child
@@ -548,16 +557,35 @@ class LocalEnvironment(BaseEnvironment):
         # Docker security contexts.  See incident 2026-06-05 (48h+ debugging).
         if _popen_cwd and not _IS_WINDOWS:
             _is_root_user = os.getuid() == 0
-            if not _is_root_user and _popen_cwd == "/root":
+            # Broader check: any path that starts with /root or that we can't chdir to
+            _cwd_is_root = _popen_cwd == "/root" or _popen_cwd.rstrip("/") == "/root"
+            if not _is_root_user and _cwd_is_root:
                 _fallback = os.environ.get("HERMES_HOME", "/tmp")
                 logger.warning(
-                    "cwd is /root but running as non-root user (UID %d); "
+                    "cwd is %r but running as non-root user (UID %d); "
                     "falling back to %s to prevent PermissionError",
+                    _popen_cwd,
                     os.getuid(),
                     _fallback,
                 )
                 _popen_cwd = _fallback
                 self.cwd = _fallback
+            elif not _is_root_user:
+                # Verify cwd is accessible
+                try:
+                    os.chdir(_popen_cwd)
+                except (PermissionError, OSError) as _e:
+                    _fallback = os.environ.get("HERMES_HOME", "/tmp")
+                    logger.warning(
+                        "cwd %r is inaccessible (UID %d): %s; "
+                        "falling back to %s to prevent PermissionError",
+                        _popen_cwd,
+                        os.getuid(),
+                        _e,
+                        _fallback,
+                    )
+                    _popen_cwd = _fallback
+                    self.cwd = _fallback
 
         _popen_kwargs = {"creationflags": windows_hide_flags()} if _IS_WINDOWS else {}
 

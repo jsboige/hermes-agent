@@ -6,6 +6,14 @@ re-sourced before each command. CWD persists via in-band stdout markers (remote)
 or a temp file (local).
 """
 
+# Module-load sentinel — proves this exact file was imported.
+import sys as _sys
+_logging = __import__('logging')
+_logging.getLogger(__name__).warning(
+    "HERMES-PATCH-v3: base.py loaded from %s (Python %s, PID %d)",
+    __file__, _sys.version, __import__('os').getpid(),
+)
+
 import codecs
 import json
 import logging
@@ -381,6 +389,13 @@ class BaseEnvironment(ABC):
             f"printf '\\n{self._cwd_marker}%s{self._cwd_marker}\\n' \"$(pwd -P)\"\n"
         )
         try:
+            logger.debug(
+                "init_session starting (session=%s, cwd=%s, HOME=%s, os.getcwd=%s)",
+                self._session_id,
+                self.cwd,
+                self.env.get("HOME", "N/A") if self.env else "no-env",
+                os.getcwd(),
+            )
             proc = self._run_bash(bootstrap, login=True, timeout=self._snapshot_timeout)
             result = self._wait_for_process(proc, timeout=self._snapshot_timeout)
             self._snapshot_ready = True
