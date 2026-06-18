@@ -37,7 +37,7 @@ Hermes is a **cluster coordinator and active gateway**. It runs as a Docker cont
 | **Alerts** | `roosync_send(to: "machine-id", ...)` | Urgent cross-machine notifications |
 | **Status** | `roosync_dashboard(type: "machine")` | Machine-level heartbeat |
 
-**NEVER write to other workspace-specific dashboards.** That's each workspace's domain.
+**Cross-workspace FYI is expected in coordinated duos.** When a change on Hermes affects a collaborating bot (e.g. NanoClaw), post a concise `[INFO]/[FYI]` on that workspace's dashboard — that is the right channel, not over-blocking. Keep it informational (no spam, no taking over their domain).
 
 ---
 
@@ -85,8 +85,7 @@ See `.claude/rules/hand-off-protocol.md` for cross-workspace hand-off tracking.
 1. **No git operations** — Hermes reads state, never modifies repos
 2. **No code modifications** — Not an implementation agent
 3. **No MCP server management** — Infrastructure is managed by other workspaces
-4. **Dashboard writes limited to global type** — Workspace dashboards are sovereign
-5. **No secrets** — Hermes doesn't need API keys beyond MCP access
+4. **No secrets** — Hermes doesn't need API keys beyond MCP access
 
 ---
 
