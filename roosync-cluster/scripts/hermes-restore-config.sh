@@ -24,16 +24,27 @@ else
 fi
 
 # 1. Overwrite model config (upstream resets to anthropic/claude-opus-4.6)
-echo "  -> Setting model: glm-5-turbo (zai)"
-sed -i 's/^  default: "anthropic\/claude-opus-4.6"/  default: "glm-5-turbo"/' "$DATA/config.yaml"
+echo "  -> Setting model: glm-5.2 (zai, 1M context)"
+sed -i 's/^  default: "anthropic\/claude-opus-4.6"/  default: "glm-5.2"/' "$DATA/config.yaml"
 
 # Ensure provider is set to zai
 if grep -q '^  provider:' "$DATA/config.yaml"; then
     sed -i 's/^  provider: "auto"/  provider: "zai"/' "$DATA/config.yaml"
     sed -i 's/^  provider: "openrouter"/  provider: "zai"/' "$DATA/config.yaml"
 else
-    sed -i '/^  default: "glm-5-turbo"/a\  provider: "zai"' "$DATA/config.yaml"
+    sed -i '/^  default: "glm-5.2"/a\  provider: "zai"' "$DATA/config.yaml"
 fi
+
+# 1c. Set compression threshold for GLM-5.2 1M context.
+# Default upstream is 0.5 (= 500k on 1M, compresses too late). We pin to 0.24
+# so summarization triggers at ~250k tokens, leaving headroom while letting
+# long coordination sessions use most of the 1M window before compacting.
+if command -v yq >/dev/null 2>&1; then
+    yq -i '.compression.threshold = 0.24' "$DATA/config.yaml"
+else
+    sed -i 's/^  threshold: 0.5/  threshold: 0.24/' "$DATA/config.yaml"
+fi
+echo "  -> Compression threshold: 0.24 (~250k on 1M context)"
 
 # 1b. CRITICAL: Remove DUPLICATE provider: "auto" that upstream expansion adds
 echo "  -> Checking for duplicate provider: auto..."
@@ -423,7 +434,7 @@ check() {
 
 # Model
 MODEL=$(grep '^  default:' "$DATA/config.yaml" | head -1)
-[[ "$MODEL" == *glm-5-turbo* ]] && check "Model" "OK" || check "Model" "got: $MODEL"
+[[ "$MODEL" == *glm-5.2* ]] && check "Model" "OK" || check "Model" "got: $MODEL"
 
 # YAML valid (no duplicate keys)
 DUP_AUX=$(grep -c '^auxiliary:' "$DATA/config.yaml")
