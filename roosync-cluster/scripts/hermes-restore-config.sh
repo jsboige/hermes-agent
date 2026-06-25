@@ -462,6 +462,58 @@ else:
 " 2>/dev/null || echo "  -> Warning: could not check sequential-review directive"
 fi
 
+# 5d. Idempotent: enforce Telegram presence for cluster-tour + pr-review crons.
+# 2026-06-26: Hermes appeared silent in the group chat because every cron
+# returned [SILENT] when the board was covered / cluster stable. The cron
+# scheduler injects a system directive letting the agent emit "[SILENT]" to
+# suppress delivery (cron/scheduler.py:1139-1142, detected at :2064). We
+# counter-mand it at the JOB-PROMPT level so Hermes always posts at least a
+# one-line status (heartbeat), developing (<=3 lines) only when something is
+# notable. inbox-poll (30min cadence) is intentionally left SILENT-on-RAS to
+# avoid ~48 msgs/day noise; its value is silent background processing.
+echo "  -> Checking chat-presence directive in cluster-tour + pr-review prompts"
+if [ -f "$DATA/cron/jobs.json" ]; then
+python3 -c "
+import json
+path = '$DATA/cron/jobs.json'
+with open(path, 'r') as f:
+    data = json.load(f)
+MARKER = 'PRESENCE-CHAT 2026-06-26'
+HEADER = (
+    '\n\n## DIRECTIVE PRESENCE-CHAT 2026-06-26\n\n'
+    '**Presence chat obligatoire.** Meme si rien de notable, poste au moins 1 phrase '
+    'disant ce que tu as verifie (ex: tour 18:00Z - cluster 6/6 stable, board couvert, RAS). '
+    'Developpe (jusqu a 3 lignes) uniquement si quelque chose est notable. '
+    '**Ne reponds JAMAIS [SILENT] dans ce job** - le marker systeme du scheduler est '
+    'contre-mande ici ; ta reponse est TOUJOURS livree a Telegram.\n'
+)
+CLUSTER_NEW = 'Poste TOUJOURS un message - JAMAIS [SILENT]. 1 phrase en RAS, jusqu a 3 lignes si delta notable.'
+PRREV_NEW = 'Poste TOUJOURS ce bilan meme si X=0 (ex: pr-review 19:23Z - board couvert, 0 nouveaute, Z SHA-skips). Ne reponds jamais [SILENT].'
+changed = False
+for job in data.get('jobs', []):
+    name = job.get('name', '')
+    p = job.get('prompt', '')
+    if name in ('hermes-cluster-tour', 'hermes-pr-review'):
+        if MARKER not in p:
+            if name == 'hermes-cluster-tour':
+                p = p.replace('Silence si RAS', CLUSTER_NEW)
+            else:
+                p = p.replace('Ne liste que les reviews EFFECTIVEMENT postees.', 'Ne liste que les reviews EFFECTIVEMENT postees. ' + PRREV_NEW)
+            if '\n## FORMAT OUTPUT' in p:
+                p = p.replace('\n## FORMAT OUTPUT', HEADER + '\n## FORMAT OUTPUT', 1)
+            else:
+                p = p + HEADER
+            job['prompt'] = p
+            changed = True
+if changed:
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print('  -> chat-presence directive injected into cluster-tour + pr-review prompts')
+else:
+    print('  -> chat-presence directive already present (no-op)')
+" 2>/dev/null || echo "  -> Warning: could not check chat-presence directive"
+fi
+
 
 # 6. Install croniter
 echo "  -> Checking croniter"
