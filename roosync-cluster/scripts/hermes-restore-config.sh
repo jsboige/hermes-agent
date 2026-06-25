@@ -23,16 +23,30 @@ else
     echo "  -> No .env.secrets file, using environment variables"
 fi
 
-# 1. Overwrite model config (upstream resets to anthropic/claude-opus-4.6)
-echo "  -> Setting model: glm-5.2 (zai, 1M context)"
-sed -i 's/^  default: "anthropic\/claude-opus-4.6"/  default: "glm-5.2"/' "$DATA/config.yaml"
+# 1. Overwrite model config — Phase 2 v3 (2026-06-25): route via claudish proxy
+# Why claude-sonnet-4-6, not glm-5.2? Hermes Python wire selector picks the HTTP
+# format from the model registry: a Claude name => /v1/messages (Anthropic wire),
+# which is what claudish serves. A GLM name => /chat/completions (OpenAI wire),
+# which claudish does NOT serve. Claudish remaps `claude-sonnet-*` => `gc@glm-5.2`
+# server-side via modelMap (commit 16949b4). Slug normalization also fixed in
+# claudish (5316c42). Net result: Hermes hits gc@glm-5.2 with claudish's 529
+# patient-backoff (Issue B, deploy #3 ~5min schedule) in front of z.ai.
+# See [[feedback-hermes-wire-selector]] for the full diagnosis.
+echo "  -> Setting model: claude-sonnet-4-6 (anthropic wire via claudish -> gc@glm-5.2)"
+sed -i 's/^  default: "anthropic\/claude-opus-4.6"/  default: "claude-sonnet-4-6"/' "$DATA/config.yaml"
+# Idempotent: handles re-runs and older Phase-1 configs that still have glm-5.2.
+sed -i 's/^  default: "glm-5.2"/  default: "claude-sonnet-4-6"/' "$DATA/config.yaml"
 
-# Ensure provider is set to zai
+# Ensure provider is set to anthropic (built-in profile, transport=anthropic_messages).
+# DO NOT add a `providers.anthropic` section in user-config — resolve_user_provider()
+# would default its transport to openai_chat, defeating the Claude-name trick.
+# Instead, ANTHROPIC_BASE_URL env var (set in step 4 below) points at claudish.
 if grep -q '^  provider:' "$DATA/config.yaml"; then
-    sed -i 's/^  provider: "auto"/  provider: "zai"/' "$DATA/config.yaml"
-    sed -i 's/^  provider: "openrouter"/  provider: "zai"/' "$DATA/config.yaml"
+    sed -i 's/^  provider: "auto"/  provider: "anthropic"/' "$DATA/config.yaml"
+    sed -i 's/^  provider: "openrouter"/  provider: "anthropic"/' "$DATA/config.yaml"
+    sed -i 's/^  provider: "zai"/  provider: "anthropic"/' "$DATA/config.yaml"
 else
-    sed -i '/^  default: "glm-5.2"/a\  provider: "zai"' "$DATA/config.yaml"
+    sed -i '/^  default: "claude-sonnet-4-6"/a\  provider: "anthropic"' "$DATA/config.yaml"
 fi
 
 # 1c. Set compression threshold for GLM-5.2 1M context.
@@ -45,6 +59,43 @@ else
     sed -i 's/^  threshold: 0.5/  threshold: 0.24/' "$DATA/config.yaml"
 fi
 echo "  -> Compression threshold: 0.24 (~250k on 1M context)"
+
+# 1a. api_max_retries: 3 -> 7 (backoff crest-riding, NOT max-absorb).
+# z.ai HTTP 429 code 1305 "service overloaded" = sustained crest (40-44/h
+# nocturne). Existing jittered_backoff (base 2s, cap 60s) is correct but
+# with 5 retries abandons after ~62s BEFORE reaching the cap -> run dies,
+# coordinator blind 2h. 7 lets retries reach the 60s cap (attempts 6-7 wait
+# ~60-90s, matching the ~82s inter-429 gap) = genuine back-off that rides
+# the crest. NOT hammering: later retries SPACE OUT (60s) not quick-fire.
+# Model downgrade rejected (glm-5.1 superseded by 5.2).
+if command -v yq >/dev/null 2>&1; then
+    yq -i '.agent.api_max_retries = 7' "$DATA/config.yaml"
+else
+    sed -i 's/^  api_max_retries: [0-9][0-9]*/  api_max_retries: 7/' "$DATA/config.yaml"
+fi
+echo "  -> api_max_retries: 7 (reach 60s backoff cap, ride overload crests)"
+
+
+# 1d. Patch jittered_backoff call site for HTTP 429 (conversation_loop.py:3439).
+# 2026-06-25: z.ai hardened concurrent access quota. Upstream default
+# base_delay=2.0s, max_delay=60.0s is too tight — each Hermes request retries
+# too fast under saturation, adding concurrent pressure on the very pool that
+# is overloaded. Patched to base_delay=5.0s, max_delay=120.0s — aligns with
+# the in-code _retry_after cap (120s) and the invalid-response site at :1357
+# which already uses 5.0/120.0. Combined with api_max_retries=7 (step 1a):
+# retries now 5->10->20->40->80->120->120s ~= 6.5 min total back-off, well
+# below the 30 min cron gateway_timeout. Idempotent: skips if already patched.
+echo "  -> Checking conversation_loop.py backoff tuning (line 3439)"
+CONV_LOOP="/opt/hermes/agent/conversation_loop.py"
+if [ -f "$CONV_LOOP" ]; then
+    if grep -q 'jittered_backoff(retry_count, base_delay=2\.0, max_delay=60\.0)' "$CONV_LOOP"; then
+        sed -i 's|jittered_backoff(retry_count, base_delay=2\.0, max_delay=60\.0)|jittered_backoff(retry_count, base_delay=5.0, max_delay=120.0)|g' "$CONV_LOOP"
+        find /opt/hermes/agent/__pycache__/ -name "conversation_loop*" -delete 2>/dev/null || true
+        echo "  -> backoff patched: base 2.0->5.0s, max 60->120s (429 path) + .pyc cleared"
+    else
+        echo "  -> backoff already tuned to 5.0/120.0 (no-op)"
+    fi
+fi
 
 # 1b. CRITICAL: Remove DUPLICATE provider: "auto" that upstream expansion adds
 echo "  -> Checking for duplicate provider: auto..."
@@ -252,9 +303,16 @@ HOME=/opt/data
 # XDG — prevent gateway-locks from landing in /root/.local/state
 XDG_STATE_HOME=/opt/data/.local/state
 
-# z.ai / GLM provider
+# z.ai / GLM provider (still used by auxiliary tasks: compression, image, browser, web)
 GLM_API_KEY=${GLM_API_KEY:-}
-GLM_BASE_URL=${GLM_BASE_URL:-https://api.z.ai/api/coding/paas/v4}
+GLM_BASE_URL=${GLM_BASE_URL:-https://open.bigmodel.cn/api/coding/paas/v4}
+
+# Anthropic / claudish (Phase 2 v3 2026-06-25): main model routes via po-2023 claudish proxy.
+# Claudish accepts model: claude-sonnet-4-6 on /v1/messages and remaps to gc@glm-5.2.
+# Token is placeholder because claudish ignores it on LAN trust path.
+# See [[feedback-hermes-wire-selector]] for why this matters.
+ANTHROPIC_BASE_URL=http://192.168.0.46:3000
+ANTHROPIC_TOKEN=placeholder
 
 # Telegram bot
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
@@ -300,6 +358,110 @@ with open('$DATA/cron/jobs.json', 'w') as f:
 print('  -> jobs.json OK')
 " 2>/dev/null || echo "  -> Warning: could not check jobs.json format"
 fi
+
+# 5b. Ensure #2505 read-body directive in pr-review prompt (issue #2505, 2026-06-23)
+# Idempotent: inject the "read all existing reviews before posting" discipline into
+# the hermes-pr-review cron prompt if the marker is absent. Guarantees the directive
+# survives a full rebuild (jobs.json prompts are NOT regenerated elsewhere).
+echo "  -> Checking #2505 read-body directive in pr-review prompt"
+if [ -f "$DATA/cron/jobs.json" ]; then
+python3 -c "
+import json
+path = '$DATA/cron/jobs.json'
+with open(path, 'r') as f:
+    data = json.load(f)
+MARKER = 'READ-BODY issue #2505'
+DIRECTIVE = (
+    '\n\n## \u26a0\ufe0f REGLE ANTI-SPAM \u2014 PRIORITE ABSOLUE - READ-BODY issue #2505\n\n'
+    '**Discipline read-body (issue #2505, 2026-06-23) :** avant de poster, lis TOUTES '
+    'les reviews + commentaires existants (humains ET bots, **dont NanoClaw**) sur la PR '
+    '(`gh pr view NNN --json reviews,comments`). Ne poste que du **contenu reellement neuf**. '
+    'Ne **jamais dupliquer** ni **contredire aveuglement** une review deja postee - en cas de '
+    'desaccord, lis d abord sa justification et sois explicite sur ce qui est neuf/incorrect. '
+    'Tout deja couvert -> silence (ou bref \`[ACK]\`).\n'
+)
+changed = False
+for job in data.get('jobs', []):
+    if job.get('name') == 'hermes-pr-review':
+        p = job.get('prompt', '')
+        if MARKER not in p:
+            # Insert right after the first line (role declaration)
+            if '\n' in p:
+                head, rest = p.split('\n', 1)
+                job['prompt'] = head + DIRECTIVE + rest
+            else:
+                job['prompt'] = p + DIRECTIVE
+            changed = True
+if changed:
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print('  -> #2505 read-body directive injected into pr-review prompt')
+else:
+    print('  -> #2505 read-body directive already present (no-op)')
+" 2>/dev/null || echo "  -> Warning: could not check #2505 directive"
+fi
+
+# 5c. Idempotent: inject the "sequential review processing" directive into the
+# hermes-pr-review prompt to prevent any future fan-out via Task tool / sub-agents.
+# 2026-06-25: z.ai hardened concurrent access -> reducing parallel API emission
+# from the bot side (claudish handles the proxy side via 529 patient-backoff).
+# Hermes is implicitly sequential today but this anchor prevents regression.
+echo "  -> Checking sequential-review directive in pr-review prompt"
+if [ -f "$DATA/cron/jobs.json" ]; then
+python3 -c "
+import json
+path = '$DATA/cron/jobs.json'
+with open(path, 'r') as f:
+    data = json.load(f)
+MARKER = 'TRAITEMENT SEQUENTIEL STRICT'
+DIRECTIVE = (
+    '
+
+## TRAITEMENT SEQUENTIEL STRICT (#debit-zai 2026-06-25)
+
+'
+    '**Pour limiter la pression concurrente sur z.ai (durcissement quotas 2026-06-25)** : '
+    'traiter les PRs **une apres l autre dans ce tour principal**. INTERDIT :
+'
+    '- Lancer des sous-agents (Task tool) pour paralleliser les reviews
+'
+    '- Emettre plusieurs gh API calls en parallele (parallel tool calls dans un meme tour)
+
+'
+    'Finir 1 PR completement (fetch + dedup + diff + review post) avant de passer a la '
+    'suivante. Plafond \`Max 5 PRs/cycle\` inchange - juste **etale sequentiellement** '
+    'au lieu de fan-out. Cron lance toutes les 1h, donc largement le temps.
+'
+)
+changed = False
+for job in data.get('jobs', []):
+    if job.get('name') == 'hermes-pr-review':
+        p = job.get('prompt', '')
+        # Match both accented and de-accented marker variants
+        if MARKER not in p and 'TRAITEMENT SEQUENTIEL' not in p.upper() and 'SEQUENTIEL STRICT' not in p.upper():
+            anchor_a = '## REGLE TOKENS'
+            anchor_b = '## RULE TOKENS'
+            inserted = False
+            for anc in ('## REGLE TOKENS', '## RULE TOKENS', '## TOKENS PAR REPO'):
+                if anc in p:
+                    p = p.replace(anc, DIRECTIVE.strip() + '
+
+' + anc, 1)
+                    inserted = True
+                    break
+            if not inserted:
+                p = p + DIRECTIVE
+            job['prompt'] = p
+            changed = True
+if changed:
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print('  -> sequential-review directive injected into pr-review prompt')
+else:
+    print('  -> sequential-review directive already present (no-op)')
+" 2>/dev/null || echo "  -> Warning: could not check sequential-review directive"
+fi
+
 
 # 6. Install croniter
 echo "  -> Checking croniter"
@@ -432,9 +594,9 @@ check() {
     fi
 }
 
-# Model
+# Model — Phase 2 v3: must be claude-sonnet-4-6 (anthropic wire via claudish)
 MODEL=$(grep '^  default:' "$DATA/config.yaml" | head -1)
-[[ "$MODEL" == *glm-5.2* ]] && check "Model" "OK" || check "Model" "got: $MODEL"
+[[ "$MODEL" == *claude-sonnet-4-6* ]] && check "Model" "OK" || check "Model" "got: $MODEL"
 
 # YAML valid (no duplicate keys)
 DUP_AUX=$(grep -c '^auxiliary:' "$DATA/config.yaml")
@@ -447,9 +609,14 @@ else
     check "YAML duplicates" "aux=$DUP_AUX stt=$DUP_STT mcp=$DUP_MCP appr=$DUP_APPR"
 fi
 
-# Provider
+# Provider — Phase 2 v3: main provider is anthropic (claudish wire).
+# Auxiliary providers still on zai (compression, image, browser, web) — verified separately below.
 PROV=$(grep '^  provider:' "$DATA/config.yaml" | head -1)
-[[ "$PROV" == *zai* ]] && check "Provider" "OK" || check "Provider" "got: $PROV"
+[[ "$PROV" == *anthropic* ]] && check "Provider (main=anthropic)" "OK" || check "Provider" "got: $PROV"
+
+# ANTHROPIC_BASE_URL must point at claudish proxy for Phase 2 v3 to work.
+ANTH_URL=$(grep -c '^ANTHROPIC_BASE_URL=http://192.168.0.46:3000' "$DATA/.env" 2>/dev/null || echo 0)
+[ "$ANTH_URL" = "1" ] && check "ANTHROPIC_BASE_URL (claudish)" "OK" || check "ANTHROPIC_BASE_URL" "missing or wrong (count=$ANTH_URL)"
 
 # No duplicate provider: auto
 DUP=$(grep -c '^ *provider: "auto"' "$DATA/config.yaml" || true)
