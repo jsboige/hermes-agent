@@ -1,46 +1,56 @@
-"""Atomic GitHub review POST guard.
+"""GitHub review POST guard module (issue #3476 — **unwired**).
 
-Issue #3476 — twin-same-SHA reviews emitted by the hermes cron container on
-myia-po-2026 (resolution: ``state.db`` shows the ``hermes-pr-review`` and
-``hermes-inbox-poll`` cron lanes POSTing GitHub reviews independently of the
-tracked interactive lane). The root cause was a race window between the lane's
-pool scan and the POST: the scan saw ``reviews=0``, the tracked lane reviewed
-between scan and POST, the cron lane posted a second review on the same SHA,
-producing an unclaimed "twin" review (#14807, #14819, #14821, #14863 ×2,
-#14866, #14878, #3477, …). User-approved remediation (datapoint #16,
-2026-09-13): **re-scan reviews immediately before 100 % of POSTs**, with a
-cycle/lane attribution convention so the receiving end can attribute every
-emission.
+Twin-same-SHA reviews were emitted by the hermes cron container on
+myia-po-2026: the ``hermes-pr-review`` and ``hermes-inbox-poll`` cron lanes
+POST GitHub reviews independently of the tracked interactive lane. The lane's
+pool scan saw ``reviews=0``, the tracked lane reviewed between scan and POST,
+and the cron lane posted a second review on the same SHA (#14807, #14819,
+#14821, #14863 ×2, #14866, #14878, #3477, …). User-approved remediation
+(datapoint #16, 2026-09-13): re-scan reviews immediately before every POST,
+with a cycle/lane attribution convention so the receiving end can attribute
+every emission.
 
-The atomic guard: a single ``sh -c`` invocation that performs the GET
-(``/repos/{owner}/{repo}/pulls/{pr}/reviews``) **and** the conditional POST
-(``/repos/{owner}/{repo}/pulls/{pr}/reviews``) in **one subprocess**. The
-kernel cannot context-switch between the GET and the POST — the race window is
-zero. A Python-side implementation that GETs then POSTs from two separate
-``subprocess.run()`` calls would leave a measurable gap; per datapoint #15
-§4, only 6/46 cron POSTs (13 %) had the atomic shape before this module
-shipped.
+This module provides the guarded POST primitive. **No lane calls it yet**:
+the ``hermes-pr-review`` / ``hermes-inbox-poll`` lanes are configured in the
+po-2026 container's cron setup, outside this repository, so wiring them is
+follow-up work tracked in ``jsboige/roo-extensions#3476``. Until that wiring
+lands, 0 % of container POSTs go through this guard.
+
+What the single ``sh -c`` subprocess does and does not buy: the GET
+(``/repos/{owner}/{repo}/pulls/{pr}/reviews``) and the conditional POST run
+inside one shell invocation, which removes the Python-side gap between the
+check and the send. It is **not** an atomicity guarantee: the GET and the
+POST are two ``gh`` processes inside that shell, and the kernel may schedule
+another lane's guard between them. Cross-lane serialization must come from
+the caller holding the canonical Hermes cron lock
+(``~/.hermes/cron/.tick.lock``) around this call at wiring time.
 
 Cycle/lane attribution: by default the guard appends a single line to the
 review body before POSTing::
 
     [Hermes <lane>, cycle :XX DD/MM, host <host>]
 
-- ``<lane>``: the cron lane name (``hermes-pr-review``, ``hermes-inbox-poll``,
-  ``kanban-dispatcher``, …) — passed by the caller or read from
-  ``HERMES_LANE`` env.
-- ``<host>``: ``socket.gethostname()`` — falls back to
-  ``HERMES_HOSTNAME`` / ``unknown``.
+- ``<lane>``: the cron lane name (``hermes-pr-review``,
+  ``hermes-inbox-poll``, …) — passed by the caller or read from the
+  ``HERMES_LANE`` env override. Nothing in this repository exports
+  ``HERMES_LANE`` / ``HERMES_HOSTNAME``; the container-side lane wrapper is
+  expected to set them when the guard is wired.
+- ``<host>``: ``socket.gethostname()`` — ``HERMES_HOSTNAME`` env override
+  wins when set, ``unknown`` as last resort.
 - Cycle label format ``:XX DD/MM`` matches the convention already in use by
   the tracked interactive lane on po-2026 (datapoint #16 §2: the cycle
-  marker in body is the **single invariant** that separates tracked emissions
-  from twins). The marker line is **idempotent**: if the body already ends
-  with a ``[Hermes …]`` line, no second marker is appended.
+  marker in body is the **single invariant** that separates tracked
+  emissions from twins).
+- The marker line is **idempotent**: if the body already **ends** with a
+  full ``[Hermes <lane>, cycle :XX DD/MM, host <host>]`` line, no second
+  marker is appended. A partial marker (missing lane/cycle/host) or a
+  quoted ``[Hermes …]`` line mid-body does **not** count — the marker is
+  detected only at the very end of the body.
 
 Module surface:
 
 - :func:`post_review_if_unique` — primary entry point; one shell call,
-  atomic check + POST.
+  check + POST.
 - :func:`post_review` — convenience wrapper: auto-resolves the PR head SHA
   via ``gh pr view``, then calls :func:`post_review_if_unique`.
 - :func:`append_attribution_marker` — pure helper that adds the marker line
@@ -49,8 +59,8 @@ Module surface:
 
 All subprocess invocations use ``sh -c`` with a temporary file holding the
 POST payload so the command line does not embed secrets or large bodies
-(args are visible to ``/proc/<pid>/cmdline`` on Linux, and the
-``--input-file`` form is the documented GitHub-CLI pattern for JSON payloads).
+(args are visible to ``/proc/<pid>/cmdline`` on Linux; ``gh api --input
+<file>`` is the documented GitHub-CLI pattern for JSON payloads).
 """
 
 from __future__ import annotations
@@ -63,23 +73,26 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Cycle/lane attribution marker: a single bracketed line at the end of the
-# body. The regex captures any prior marker so a body that already carries
-# one (idempotency) is left untouched.
+# Cycle/lane attribution marker: a single bracketed line at the very END of
+# the body. All three fields (lane, cycle, host) are required, so a bare
+# ``[Hermes]``, a partial marker, or a quoted ``[Hermes …]`` line in the
+# middle of the body never suppresses the fresh marker (issue #3476 review:
+# the previous permissive regex accepted citations and templates).
 _ATTRIBUTION_LINE_RE = re.compile(
-    r"^\s*\[Hermes(?:\s+[^\]]+)?(?:,\s*cycle\s+:[0-9A-Za-z]+(?:\s+[0-9A-Za-z/-]+)?)?"
-    r"(?:,\s*host\s+[^\]]+)?\]\s*$",
-    re.MULTILINE,
+    r"\[Hermes\s+(?P<lane>[^\],]+),"
+    r"\s*cycle\s+:(?P<cycle>\d{1,2})\s+(?P<day>\d{1,2}/\d{1,2}),"
+    r"\s*host\s+(?P<host>[^\]]+)\]\s*$"
 )
 
-# Default values — overridden by env when running inside the hermes cron
-# container.  Env wins because cron jobs run with these exported by the
-# dispatch wrapper (`docker/main-wrapper.sh:75`).
+# Default lane when the caller passes none and HERMES_LANE is unset. No code
+# in this repository exports the override — it belongs to the container-side
+# lane wrapper once the guard is wired (see module docstring).
 _DEFAULT_LANE = "hermes-pr-review"
 _DEFAULT_HOST = ""  # populated at call time from socket.gethostname()
 
@@ -117,8 +130,10 @@ def append_attribution_marker(body: str, *, lane: Optional[str] = None,
                               cycle: Optional[str] = None) -> str:
     """Return ``body`` with a single attribution marker appended.
 
-    Idempotent: if the body already ends with a ``[Hermes …]`` line (matching
-    :data:`_ATTRIBUTION_LINE_RE`), the marker is not duplicated.
+    Idempotent: if the body already **ends** with a full
+    ``[Hermes <lane>, cycle :XX DD/MM, host <host>]`` line (matching
+    :data:`_ATTRIBUTION_LINE_RE`), the marker is not duplicated. Partial or
+    mid-body markers do not count.
     """
     if not body:
         body = ""
@@ -153,7 +168,7 @@ class PostResult:
         The body that was actually sent (with the attribution marker
         appended). Useful for logs and dashboard receipts.
     elapsed_s:
-        Wall-clock duration of the atomic subprocess call.
+        Wall-clock duration of the subprocess call (measured, not a stub).
     stdout, stderr:
         Captured subprocess output — empty for ``posted=True`` on success,
         diagnostic on error.
@@ -170,11 +185,12 @@ class PostResult:
 
 
 def _require_gh() -> str:
-    path = shutil.which("gh")
+    """Resolve the ``gh`` binary — ``GH_PATH`` override wins over ``PATH``."""
+    path = os.environ.get("GH_PATH", "").strip() or shutil.which("gh")
     if not path:
         raise RuntimeError(
-            "github_review_guard: 'gh' CLI not on PATH — install gh or "
-            "set GH_PATH env var"
+            "github_review_guard: 'gh' CLI not found — install it on PATH "
+            "or set GH_PATH"
         )
     return path
 
@@ -192,14 +208,19 @@ def post_review_if_unique(
     cycle: Optional[str] = None,
     timeout_s: float = 60.0,
 ) -> PostResult:
-    """Atomic guard: GET reviews, skip if a same-SHA review exists, else POST.
+    """Guarded POST: GET reviews, skip if a same-SHA review exists, else POST.
 
-    Implemented as **one** ``sh -c`` subprocess so the GET and POST are
-    inseparable at the kernel level — no Python-side race window, no
-    context-switch gap. The shell snippet writes the payload to a tempfile
-    (``--input-file`` form, the documented ``gh`` pattern) and uses
-    ``gh api`` for both the GET and POST so the caller does not depend on
-    ``gh pr review`` (which does not expose ``commit_id`` filtering).
+    Implemented as **one** ``sh -c`` subprocess so the check and the POST
+    share a single shell invocation — no Python-side gap between them. This
+    does **not** serialize concurrent lanes (see module docstring): the
+    caller is responsible for holding the canonical Hermes cron lock around
+    this call at wiring time.
+
+    The count query uses ``gh api --paginate --slurp``: with ``--slurp``,
+    ``gh`` applies the jq program **once** to the aggregated array of pages
+    and emits a single integer. Without it, jq runs per page and two empty
+    pages print ``0\\n0`` — which a naive ``[ "$N" != "0" ]`` comparison
+    misreads as a duplicate, false-skipping a legitimate POST.
 
     Parameters
     ----------
@@ -212,7 +233,8 @@ def post_review_if_unique(
         other SHA are ignored.
     body:
         Review body. The attribution marker is appended automatically unless
-        one is already present (see :func:`append_attribution_marker`).
+        the body already ends with a full one (see
+        :func:`append_attribution_marker`).
     event:
         ``"COMMENT"``, ``"APPROVE"``, or ``"REQUEST_CHANGES"``.
     lane, host, cycle:
@@ -232,10 +254,11 @@ def post_review_if_unique(
     Raises
     ------
     RuntimeError
-        Only if ``gh`` is absent from ``PATH``. All other failure modes
-        surface as :class:`PostResult` with ``posted=False`` and a populated
-        ``stderr`` — the guard is fail-closed but never raises to the
-        caller, so a transient GitHub error does not kill the cron tick.
+        Only if ``gh`` is absent (neither ``GH_PATH`` nor ``PATH`` resolve
+        it). All other failure modes surface as :class:`PostResult` with
+        ``posted=False`` and a populated ``stderr`` — the guard is
+        fail-closed but never raises to the caller, so a transient GitHub
+        error does not kill the cron tick.
     """
     if not commit_sha or len(commit_sha) < 7:
         raise ValueError(
@@ -252,8 +275,8 @@ def post_review_if_unique(
         body, lane=lane, host=host, cycle=cycle,
     )
 
-    # Write the payload to a tempfile; --input-file avoids leaking the body
-    # through /proc/<pid>/cmdline and is the documented gh pattern.
+    # Write the payload to a tempfile; gh api --input <file> avoids leaking
+    # the body through /proc/<pid>/cmdline.
     payload = json.dumps({
         "body": body_with_marker,
         "event": event,
@@ -264,26 +287,30 @@ def post_review_if_unique(
 set -eu
 PAYLOAD="$1"
 SHA="$2"
+GH="$3"
 
 # GET reviews, count entries whose commit_id matches $SHA.
-# --paginate pulls all pages; --jq filters and counts in one pass.
-N=$(gh api \
+# --paginate pulls all pages; --slurp makes gh apply the jq program ONCE to
+# the aggregated array-of-pages, so N is a single integer. Without --slurp,
+# jq runs per page and two empty pages print "0\n0" — a false SKIP_DUP.
+N=$("$GH" api \
     -H "Accept: application/vnd.github+json" \
     "/repos/__OWNER__/__REPO__/pulls/__PR__/reviews" \
-    --paginate \
-    --jq '[.[] | select(.commit_id == "'"$SHA"'")] | length')
+    --paginate --slurp \
+    --jq '[.[][] | select(.commit_id == "'"$SHA"'")] | length')
 
 if [ "$N" != "0" ]; then
     echo "SKIP_DUP:$N"
     exit 0
 fi
 
-# Atomic POST — same process, no context switch before this line.
-gh api \
+# POST — same shell invocation as the check. gh api --input reads the JSON
+# payload from the tempfile, keeping the body off the command line.
+"$GH" api \
     -H "Accept: application/vnd.github+json" \
     -X POST \
     "/repos/__OWNER__/__REPO__/pulls/__PR__/reviews" \
-    --input-file "$PAYLOAD"
+    --input "$PAYLOAD"
 """.replace("__OWNER__", owner).replace(
         "__REPO__", repo
     ).replace("__PR__", str(pr_number))
@@ -294,12 +321,11 @@ gh api \
         payload_file.write(payload)
         payload_path = payload_file.name
 
-    # The atomic call: ``sh -c`` with the inline snippet.  ``gh`` runs in the
-    # SAME shell process as the GET-reviews check, so the kernel cannot
-    # context-switch between the GET and the POST — race window is zero.
-    # ``$0`` is ``"_"`` (a placeholder argv[0] for the shell script) so the
-    # shell's positional parameter counting is unambiguous.
-    cmd = ["sh", "-c", shell_script, "_", payload_path, commit_sha]
+    # One sh -c invocation: the check and the POST share the shell (the
+    # resolved gh path is passed as $3 so the binary verified by
+    # _require_gh() is the one actually invoked).
+    cmd = ["sh", "-c", shell_script, "_", payload_path, commit_sha, gh]
+    t0 = time.monotonic()
     try:
         completed = subprocess.run(
             cmd,
@@ -309,6 +335,7 @@ gh api \
             timeout=timeout_s,
         )
     except subprocess.TimeoutExpired as e:
+        elapsed = time.monotonic() - t0
         logger.warning(
             "github_review_guard: timeout after %.1fs for %s/%s#%d @ %s",
             timeout_s, owner, repo, pr_number, commit_sha[:8],
@@ -318,7 +345,7 @@ gh api \
             reason="error",
             commit_id=commit_sha,
             body_with_marker=body_with_marker,
-            elapsed_s=timeout_s,
+            elapsed_s=elapsed,
             stderr=f"timeout after {timeout_s}s: {e}",
         )
     finally:
@@ -327,7 +354,7 @@ gh api \
         except OSError:
             pass
 
-    elapsed = 0.0  # subprocess.run has no built-in timing; capture manually
+    elapsed = time.monotonic() - t0
     stdout = completed.stdout
     stderr = completed.stderr
 
@@ -400,7 +427,8 @@ def post_review(
     head, then delegates to :func:`post_review_if_unique`. The convenience
     wrapper deliberately does **not** combine the head lookup and the
     guarded POST in one shell call: the lookup is informational, the
-    guard's atomic invariant applies only to the GET-reviews + POST pair.
+    guard's single-shell invariant applies only to the GET-reviews + POST
+    pair.
     """
     gh = _require_gh()
     head_proc = subprocess.run(
