@@ -11,7 +11,8 @@ inherits a verified primitive:
 2. **The guard's subprocess is one ``sh -c`` call** — and that call is
    exercised for real against a stub ``gh`` that records its arguments
    (issue #3476 review: the mock-only tests never ran the shell).
-3. **Paginated counting** uses ``--slurp``: two pages with zero matching
+3. **Paginated counting** sums per-page jq results with ``awk`` (gh >=
+   2.100 rejects ``--slurp`` with ``--jq``): two pages with zero matching
    review must NOT false-skip the POST.
 4. **GET-reviews skipping** is honored: a same-``commit_id`` review means
    the POST is not issued.
@@ -282,8 +283,8 @@ def test_gh_path_env_is_honored(monkeypatch):
 
 _STUB_GH = r"""#!/bin/sh
 # Stub gh for the #3476 guard tests. Emulates gh's --paginate semantics:
-#  - GET with --slurp  -> one aggregated jq result  ($GH_STUB_COUNT, def 0)
-#  - GET without slurp -> per-page jq results, two empty pages -> "0\n0"
+#  - GET -> per-page jq results; $GH_STUB_COUNT per page (def 0), the
+#    snippet's awk sum must aggregate them into a single integer
 #  - POST              -> records the --input payload, emits a review JSON
 # Every invocation's argv is appended to $GH_STUB_LOG (one arg per line,
 # "---CALL---" separators).
@@ -306,12 +307,15 @@ case " $* " in
     echo '{"id": 424242}'
     exit 0
     ;;
-  *" --slurp "*)
-    echo "${GH_STUB_COUNT:-0}"
-    exit 0
-    ;;
   *)
-    printf '0\n0\n'
+    # GET reviews: per-page jq results, two pages -> lines. $GH_STUB_COUNT
+    # (when > 0) is emitted on each page so the awk sum sees it twice.
+    n="${GH_STUB_COUNT:-0}"
+    i=0
+    while [ "$i" -lt 2 ]; do
+      printf '%s\n' "$n"
+      i=$((i+1))
+    done
     exit 0
     ;;
 esac
@@ -371,10 +375,10 @@ def test_real_snippet_posts_with_stub_gh(stub_gh, monkeypatch):
     calls = stub_gh.calls()
     assert len(calls) == 2, f"expected GET + POST, saw {calls}"
     get_args, post_args = calls
-    # GET: reviews endpoint, paginated AND slurped (single aggregated count).
+    # GET: reviews endpoint, paginated; per-page counts summed by awk.
     assert "/repos/jsboige/CoursIA/pulls/14863/reviews" in get_args
     assert "--paginate" in get_args
-    assert "--slurp" in get_args
+    assert "--slurp" not in get_args  # gh >= 2.100 rejects --slurp with --jq
     # POST: reviews endpoint via --input (the only real gh flag).
     assert "/repos/jsboige/CoursIA/pulls/14863/reviews" in post_args
     assert "--input" in post_args
@@ -392,10 +396,12 @@ def test_real_snippet_posts_with_stub_gh(stub_gh, monkeypatch):
 @pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
 def test_real_snippet_two_pages_zero_match_still_posts(stub_gh, monkeypatch):
     """Issue #3476 review blocker 2: two pages with zero matching review
-    must NOT false-skip. The stub emits the per-page result ``0\\n0`` on any
-    GET without ``--slurp`` — the exact shape that used to make
-    ``[ "$N" != "0" ]`` true — so this test fails if ``--slurp`` is dropped
-    from the snippet."""
+    must NOT false-skip. The stub emits the per-page results ``0\\n0`` on
+    every GET — the exact shape that makes a naive ``[ "$N" != "0" ]``
+    comparison true — so this test fails if the awk sum is dropped from the
+    snippet. It also pins the gh >= 2.100 regression: ``--slurp`` combined
+    with ``--jq`` is rejected by real gh, so the snippet must aggregate
+    without it."""
     monkeypatch.setenv("GH_STUB_COUNT", "0")
     result = guard.post_review_if_unique(
         "jsboige", "CoursIA", 14863,
@@ -408,8 +414,9 @@ def test_real_snippet_two_pages_zero_match_still_posts(stub_gh, monkeypatch):
         f"stdout={result.stdout!r}"
     )
     assert result.reason == "posted"
-    # And the aggregated count really flowed through --slurp.
-    assert "--slurp" in stub_gh.calls()[0]
+    # Aggregation is awk-side: --slurp must NOT appear (gh >= 2.100 rejects
+    # --slurp with --jq, which would make every real call fail-closed).
+    assert "--slurp" not in stub_gh.calls()[0]
 
 
 @pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
@@ -423,7 +430,10 @@ def test_real_snippet_skips_when_aggregated_count_nonzero(stub_gh, monkeypatch):
     )
     assert result.posted is False
     assert result.reason == "skipped_duplicate"
-    assert result.stdout.strip() == "SKIP_DUP:2"
+    # Two pages x count 2 -> awk sum 4 (per-page counts are summed, not
+    # concatenated: "2\n2" must aggregate to 4, not read as a duplicate
+    # string).
+    assert result.stdout.strip() == "SKIP_DUP:4"
     # No POST call was issued at all.
     assert len(stub_gh.calls()) == 1
 

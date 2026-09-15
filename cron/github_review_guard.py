@@ -216,11 +216,15 @@ def post_review_if_unique(
     caller is responsible for holding the canonical Hermes cron lock around
     this call at wiring time.
 
-    The count query uses ``gh api --paginate --slurp``: with ``--slurp``,
-    ``gh`` applies the jq program **once** to the aggregated array of pages
-    and emits a single integer. Without it, jq runs per page and two empty
-    pages print ``0\\n0`` — which a naive ``[ "$N" != "0" ]`` comparison
-    misreads as a duplicate, false-skipping a legitimate POST.
+    The count query uses ``gh api --paginate`` and sums the per-page
+    counts with ``awk``: ``gh`` >= 2.100 **rejects** ``--slurp`` combined
+    with ``--jq`` (``the --slurp option is not supported with --jq``), which
+    made the previous ``--slurp`` form fail-closed on every call. Without a
+    per-page sum, two empty pages print ``0\\n0`` — which a naive
+    ``[ "$N" != "0" ]`` comparison misreads as a duplicate, false-skipping
+    a legitimate POST. Found while wiring the guard in the po-2026 cron
+    container (roo-extensions #3476): the merged tests exercised the shell
+    only against a stub ``gh``, so the incompatibility never surfaced.
 
     Parameters
     ----------
@@ -290,14 +294,16 @@ SHA="$2"
 GH="$3"
 
 # GET reviews, count entries whose commit_id matches $SHA.
-# --paginate pulls all pages; --slurp makes gh apply the jq program ONCE to
-# the aggregated array-of-pages, so N is a single integer. Without --slurp,
-# jq runs per page and two empty pages print "0\n0" — a false SKIP_DUP.
+# --paginate pulls all pages; gh >= 2.100 rejects --slurp with --jq, so each
+# page's count lands on its own line and awk sums them to a single integer.
+# A naive per-line comparison would misread "0\n0" as a duplicate (false
+# SKIP_DUP) — the awk sum keeps one integer.
 N=$("$GH" api \
     -H "Accept: application/vnd.github+json" \
     "/repos/__OWNER__/__REPO__/pulls/__PR__/reviews" \
-    --paginate --slurp \
-    --jq '[.[][] | select(.commit_id == "'"$SHA"'")] | length')
+    --paginate \
+    --jq '[.[] | select(.commit_id == "'"$SHA"'")] | length' \
+    | awk '{s+=$1} END {print s+0}')
 
 if [ "$N" != "0" ]; then
     echo "SKIP_DUP:$N"
