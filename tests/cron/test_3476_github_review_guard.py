@@ -11,13 +11,17 @@ inherits a verified primitive:
 2. **The guard's subprocess is one ``sh -c`` call** — and that call is
    exercised for real against a stub ``gh`` that records its arguments
    (issue #3476 review: the mock-only tests never ran the shell).
-3. **Paginated counting** uses ``--slurp``: two pages with zero matching
+3. **Paginated counting** sums per-page jq results with ``awk`` (gh >=
+   2.100 rejects ``--slurp`` with ``--jq``): two pages with zero matching
    review must NOT false-skip the POST.
 4. **GET-reviews skipping** is honored: a same-``commit_id`` review means
    the POST is not issued.
 5. **Fail-closed**: subprocess errors surface as :class:`PostResult` with
    ``posted=False, reason="error"`` and never raise into the cron tick.
 6. ``GH_PATH`` override is honored, and ``elapsed_s`` is measured.
+7. **Short SHAs are resolved** to the full 40-char OID before the guarded
+   shell (datapoint #18 §3, roo-extensions #3476: a truncated
+   ``commit_id`` 422s the POST and silently disables the GET dedup).
 """
 
 from __future__ import annotations
@@ -282,8 +286,8 @@ def test_gh_path_env_is_honored(monkeypatch):
 
 _STUB_GH = r"""#!/bin/sh
 # Stub gh for the #3476 guard tests. Emulates gh's --paginate semantics:
-#  - GET with --slurp  -> one aggregated jq result  ($GH_STUB_COUNT, def 0)
-#  - GET without slurp -> per-page jq results, two empty pages -> "0\n0"
+#  - GET -> per-page jq results; $GH_STUB_COUNT per page (def 0), the
+#    snippet's awk sum must aggregate them into a single integer
 #  - POST              -> records the --input payload, emits a review JSON
 # Every invocation's argv is appended to $GH_STUB_LOG (one arg per line,
 # "---CALL---" separators).
@@ -306,12 +310,20 @@ case " $* " in
     echo '{"id": 424242}'
     exit 0
     ;;
-  *" --slurp "*)
-    echo "${GH_STUB_COUNT:-0}"
+  *"/commits/"*)
+    # SHA-resolution lookup (short sha -> full OID), datapoint #18 §3.
+    echo "${GH_STUB_FULL_SHA:-}"
     exit 0
     ;;
   *)
-    printf '0\n0\n'
+    # GET reviews: per-page jq results, two pages -> lines. $GH_STUB_COUNT
+    # (when > 0) is emitted on each page so the awk sum sees it twice.
+    n="${GH_STUB_COUNT:-0}"
+    i=0
+    while [ "$i" -lt 2 ]; do
+      printf '%s\n' "$n"
+      i=$((i+1))
+    done
     exit 0
     ;;
 esac
@@ -333,6 +345,7 @@ def stub_gh(tmp_path, monkeypatch):
     monkeypatch.delenv("GH_STUB_COUNT", raising=False)
     monkeypatch.delenv("GH_STUB_SLEEP", raising=False)
     monkeypatch.delenv("GH_STUB_POST_FAIL", raising=False)
+    monkeypatch.delenv("GH_STUB_FULL_SHA", raising=False)
 
     class _Stub:
         def __init__(self):
@@ -371,10 +384,10 @@ def test_real_snippet_posts_with_stub_gh(stub_gh, monkeypatch):
     calls = stub_gh.calls()
     assert len(calls) == 2, f"expected GET + POST, saw {calls}"
     get_args, post_args = calls
-    # GET: reviews endpoint, paginated AND slurped (single aggregated count).
+    # GET: reviews endpoint, paginated; per-page counts summed by awk.
     assert "/repos/jsboige/CoursIA/pulls/14863/reviews" in get_args
     assert "--paginate" in get_args
-    assert "--slurp" in get_args
+    assert "--slurp" not in get_args  # gh >= 2.100 rejects --slurp with --jq
     # POST: reviews endpoint via --input (the only real gh flag).
     assert "/repos/jsboige/CoursIA/pulls/14863/reviews" in post_args
     assert "--input" in post_args
@@ -392,10 +405,12 @@ def test_real_snippet_posts_with_stub_gh(stub_gh, monkeypatch):
 @pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
 def test_real_snippet_two_pages_zero_match_still_posts(stub_gh, monkeypatch):
     """Issue #3476 review blocker 2: two pages with zero matching review
-    must NOT false-skip. The stub emits the per-page result ``0\\n0`` on any
-    GET without ``--slurp`` — the exact shape that used to make
-    ``[ "$N" != "0" ]`` true — so this test fails if ``--slurp`` is dropped
-    from the snippet."""
+    must NOT false-skip. The stub emits the per-page results ``0\\n0`` on
+    every GET — the exact shape that makes a naive ``[ "$N" != "0" ]``
+    comparison true — so this test fails if the awk sum is dropped from the
+    snippet. It also pins the gh >= 2.100 regression: ``--slurp`` combined
+    with ``--jq`` is rejected by real gh, so the snippet must aggregate
+    without it."""
     monkeypatch.setenv("GH_STUB_COUNT", "0")
     result = guard.post_review_if_unique(
         "jsboige", "CoursIA", 14863,
@@ -408,8 +423,9 @@ def test_real_snippet_two_pages_zero_match_still_posts(stub_gh, monkeypatch):
         f"stdout={result.stdout!r}"
     )
     assert result.reason == "posted"
-    # And the aggregated count really flowed through --slurp.
-    assert "--slurp" in stub_gh.calls()[0]
+    # Aggregation is awk-side: --slurp must NOT appear (gh >= 2.100 rejects
+    # --slurp with --jq, which would make every real call fail-closed).
+    assert "--slurp" not in stub_gh.calls()[0]
 
 
 @pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
@@ -423,7 +439,10 @@ def test_real_snippet_skips_when_aggregated_count_nonzero(stub_gh, monkeypatch):
     )
     assert result.posted is False
     assert result.reason == "skipped_duplicate"
-    assert result.stdout.strip() == "SKIP_DUP:2"
+    # Two pages x count 2 -> awk sum 4 (per-page counts are summed, not
+    # concatenated: "2\n2" must aggregate to 4, not read as a duplicate
+    # string).
+    assert result.stdout.strip() == "SKIP_DUP:4"
     # No POST call was issued at all.
     assert len(stub_gh.calls()) == 1
 
@@ -456,6 +475,116 @@ def test_real_snippet_post_failure_is_fail_closed(stub_gh, monkeypatch):
     assert "stub POST failure" in result.stderr
 
 
+# --- Short-SHA resolution (datapoint #18 §3) ---------------------------------
+
+_FULL382 = "38287ac491cc8b9edcd792a6b4856e6e377dcba4"
+
+
+def test_short_commit_sha_is_resolved_not_passed_through(monkeypatch):
+    """A 12-char SHA (the 17/09 00:26Z burst shape) is resolved to the full
+    40-char OID via a commits lookup BEFORE the guarded shell — both the
+    GET-match and the POST ``commit_id`` must use the full OID (a truncated
+    commit_id 422s on POST and never matches the dedup)."""
+    monkeypatch.delenv("GH_PATH", raising=False)
+    calls: list[tuple] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(tuple(cmd))
+
+        class _C:
+            pass
+
+        c = _C()
+        c.stderr = ""
+        if any("/commits/" in a for a in cmd):  # the resolution lookup
+            c.returncode = 0
+            c.stdout = _FULL382 + "\n"
+        else:  # the guarded sh - c
+            c.returncode = 0
+            c.stdout = json.dumps({"id": 777})
+        return c
+
+    monkeypatch.setattr(guard.subprocess, "run", _fake_run)
+    monkeypatch.setattr(guard.shutil, "which", lambda _: "/usr/bin/gh")
+
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863, "38287ac491cc",
+        "verdict", lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is True
+    assert result.commit_id == _FULL382
+    # Resolution targeted the commits endpoint with the SHORT sha.
+    assert "/repos/jsboige/CoursIA/commits/38287ac491cc" in calls[0]
+    # The guarded shell received the FULL sha as its $2 (cmd index 5).
+    assert calls[1][5] == _FULL382
+
+
+def test_short_sha_resolution_failure_fails_closed(monkeypatch):
+    """Unresolvable short SHA -> PostResult error and the guarded POST is
+    never issued (fail-closed; the lane must not fall into an unguarded
+    POST for this cause)."""
+    monkeypatch.delenv("GH_PATH", raising=False)
+    calls: list[tuple] = []
+
+    def _fake_run(cmd, **kwargs):
+        calls.append(tuple(cmd))
+
+        class _C:
+            pass
+
+        c = _C()
+        c.returncode = 1
+        c.stdout = ""
+        c.stderr = "gh: Not Found (HTTP 404)"
+        return c
+
+    monkeypatch.setattr(guard.subprocess, "run", _fake_run)
+    monkeypatch.setattr(guard.shutil, "which", lambda _: "/usr/bin/gh")
+
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863, "38287ac491cc",
+        "verdict", lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is False
+    assert result.reason == "error"
+    assert "could not be resolved" in result.stderr
+    assert "404" in result.stderr
+    # Only the resolution lookup ran — no sh -c, no POST.
+    assert len(calls) == 1
+
+
+def test_non_hex_commit_sha_raises_value_error():
+    with pytest.raises(ValueError):
+        guard.post_review_if_unique(
+            "jsboige", "CoursIA", 14863, "not-a-sha!", "verdict",
+        )
+
+
+@pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
+def test_real_snippet_short_sha_resolved_via_stub(stub_gh, monkeypatch):
+    """End-to-end through the real shell: the resolution lookup runs via the
+    stub gh, and BOTH the GET-reviews dedup match and the POST payload carry
+    the FULL OID."""
+    monkeypatch.setenv("GH_STUB_FULL_SHA", _FULL382)
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863, "38287ac491cc",
+        "verdict LGTM-side", lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is True, (
+        f"reason={result.reason!r} stderr={result.stderr!r}"
+    )
+    calls = stub_gh.calls()
+    assert len(calls) == 3, f"expected resolve + GET + POST, saw {calls}"
+    resolve_args, get_args, post_args = calls
+    assert "/repos/jsboige/CoursIA/commits/38287ac491cc" in resolve_args
+    # GET dedup jq matches on the FULL OID — a short sha would never match.
+    # (The jq program embeds the OID inside its select() — substring check.)
+    assert any(_FULL382 in a for a in get_args)
+    assert "--input" in post_args
+    payload = json.loads(stub_gh.payload_copy.read_text(encoding="utf-8"))
+    assert payload["commit_id"] == _FULL382
+
+
 # --- Convenience wrapper --------------------------------------------------
 
 
@@ -471,9 +600,13 @@ def test_post_review_resolves_head_and_delegates(monkeypatch):
             returncode = 0
 
         c = _C()
-        # First call: gh pr view -> head SHA.
+        # First call: gh pr view -> head SHA. NB: cmd[0] is the RESOLVED
+        # gh path (e.g. "/usr/bin/gh") — an equality check on "gh" never
+        # matched and this branch silently returned review JSON as the
+        # head SHA, which only passed under the old lenient validation.
         # Second call: sh -c guarded snippet -> POST.
-        if cmd and cmd[0] == "gh" and "pr" in cmd and "view" in cmd:
+        if (cmd and cmd[0].endswith("gh") and "pr" in cmd
+                and "view" in cmd):
             c.stdout = "38287ac491cc8b9edcd792a6b4856e6e377dcba4\n"
         else:
             c.stdout = json.dumps({"id": 1001})

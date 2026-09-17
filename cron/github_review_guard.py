@@ -161,7 +161,9 @@ class PostResult:
         ``"error"`` — subprocess returned non-zero or shell snippet failed
           before the POST could complete; ``stderr`` carries the diagnostic.
     commit_id:
-        SHA the guard checked against (echo of the input parameter).
+        SHA the guard checked and POSTed against — the **effective** SHA:
+        short inputs are resolved to the full 40-char OID first (datapoint
+        #18 §3), so this echoes the resolution result, not the raw input.
     review_id:
         GitHub review ID returned by the POST, or ``None`` if not posted.
     body_with_marker:
@@ -195,6 +197,43 @@ def _require_gh() -> str:
     return path
 
 
+def _resolve_full_sha(
+    gh: str, owner: str, repo: str, short_sha: str, timeout_s: float,
+) -> tuple[Optional[str], str]:
+    """Resolve a short (7-39 hex chars) SHA to its full 40-char commit OID.
+
+    One ``gh api /repos/{owner}/{repo}/commits/{sha}`` call — GitHub accepts
+    short SHAs on the commits endpoint and returns the full OID as ``.sha``.
+    Returns ``(full_sha, "")`` on success or ``(None, diagnostic)`` on
+    failure. Never raises: the caller fails closed into a ``PostResult``
+    error so a transient GitHub failure does not kill the cron tick.
+    """
+    try:
+        # Through ``sh`` like the guarded snippet: one invocation pattern,
+        # and the call works wherever ``sh`` resolves the gh binary (the
+        # direct-exec form cannot spawn a script on Windows, where the
+        # test-suite gh stub lives).
+        proc = subprocess.run(
+            ["sh", "-c", '"$1" api "$2" --jq .sha', "_", gh,
+             f"/repos/{owner}/{repo}/commits/{short_sha}"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+    except subprocess.TimeoutExpired as e:
+        return None, f"timeout after {timeout_s}s: {e}"
+    except OSError as e:
+        return None, f"spawn failed: {e}"
+    if proc.returncode != 0:
+        err = proc.stderr.strip()[:200] or f"gh api exit {proc.returncode}"
+        return None, err
+    full = proc.stdout.strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", full):
+        return None, f"unexpected resolution output: {full[:60]!r}"
+    return full, ""
+
+
 def post_review_if_unique(
     owner: str,
     repo: str,
@@ -216,11 +255,15 @@ def post_review_if_unique(
     caller is responsible for holding the canonical Hermes cron lock around
     this call at wiring time.
 
-    The count query uses ``gh api --paginate --slurp``: with ``--slurp``,
-    ``gh`` applies the jq program **once** to the aggregated array of pages
-    and emits a single integer. Without it, jq runs per page and two empty
-    pages print ``0\\n0`` — which a naive ``[ "$N" != "0" ]`` comparison
-    misreads as a duplicate, false-skipping a legitimate POST.
+    The count query uses ``gh api --paginate`` and sums the per-page
+    counts with ``awk``: ``gh`` >= 2.100 **rejects** ``--slurp`` combined
+    with ``--jq`` (``the --slurp option is not supported with --jq``), which
+    made the previous ``--slurp`` form fail-closed on every call. Without a
+    per-page sum, two empty pages print ``0\\n0`` — which a naive
+    ``[ "$N" != "0" ]`` comparison misreads as a duplicate, false-skipping
+    a legitimate POST. Found while wiring the guard in the po-2026 cron
+    container (roo-extensions #3476): the merged tests exercised the shell
+    only against a stub ``gh``, so the incompatibility never surfaced.
 
     Parameters
     ----------
@@ -229,8 +272,11 @@ def post_review_if_unique(
     pr_number:
         Pull-request number.
     commit_sha:
-        Full 40-character SHA the review must target. Reviews against any
-        other SHA are ignored.
+        SHA the review must target. A full 40-char OID is used as-is; a
+        short hex SHA (7-39 chars) is resolved to the full OID via one
+        ``gh api commits`` call **before** the guarded shell — a truncated
+        ``commit_id`` both 422s the POST and never matches the GET-reviews
+        dedup (datapoint #18 §3, roo-extensions #3476).
     body:
         Review body. The attribution marker is appended automatically unless
         the body already ends with a full one (see
@@ -260,10 +306,10 @@ def post_review_if_unique(
         fail-closed but never raises to the caller, so a transient GitHub
         error does not kill the cron tick.
     """
-    if not commit_sha or len(commit_sha) < 7:
+    sha = (commit_sha or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,40}", sha):
         raise ValueError(
-            f"commit_sha must be a SHA (got {commit_sha!r}); full 40-char "
-            "is preferred but short SHAs are accepted for parity with `gh`"
+            f"commit_sha must be a hex SHA of 7-40 chars (got {commit_sha!r})"
         )
     if event not in {"COMMENT", "APPROVE", "REQUEST_CHANGES"}:
         raise ValueError(
@@ -275,12 +321,44 @@ def post_review_if_unique(
         body, lane=lane, host=host, cycle=cycle,
     )
 
+    # Datapoint #18 §3 (roo-extensions #3476): review ``commit_id`` values on
+    # GitHub are ALWAYS full 40-char OIDs and the POST endpoint requires one —
+    # a short SHA both 422s the POST ("The commitOID is not part of the pull
+    # request") and silently disables the GET-reviews dedup (a jq
+    # ``select(.commit_id == "<short>")`` never matches a full OID). Resolve
+    # short SHAs to the full OID BEFORE the guarded shell. This lookup is
+    # informational (like ``post_review``'s head lookup): the check→POST pair
+    # stays inside the single ``sh -c`` invocation, so the twin window is not
+    # reopened.
+    if len(sha) != 40:
+        resolved, resolve_err = _resolve_full_sha(
+            gh, owner, repo, sha, timeout_s,
+        )
+        if not resolved:
+            logger.warning(
+                "github_review_guard: cannot resolve short SHA %r for "
+                "%s/%s#%d: %s",
+                sha, owner, repo, pr_number, resolve_err,
+            )
+            return PostResult(
+                posted=False,
+                reason="error",
+                commit_id=sha,
+                body_with_marker=body_with_marker,
+                elapsed_s=0.0,
+                stderr=(
+                    f"commit_sha {sha!r} is not 40 chars and could not be "
+                    f"resolved: {resolve_err}"
+                ),
+            )
+        sha = resolved
+
     # Write the payload to a tempfile; gh api --input <file> avoids leaking
     # the body through /proc/<pid>/cmdline.
     payload = json.dumps({
         "body": body_with_marker,
         "event": event,
-        "commit_id": commit_sha,
+        "commit_id": sha,
     })
 
     shell_script = r"""
@@ -290,14 +368,16 @@ SHA="$2"
 GH="$3"
 
 # GET reviews, count entries whose commit_id matches $SHA.
-# --paginate pulls all pages; --slurp makes gh apply the jq program ONCE to
-# the aggregated array-of-pages, so N is a single integer. Without --slurp,
-# jq runs per page and two empty pages print "0\n0" — a false SKIP_DUP.
+# --paginate pulls all pages; gh >= 2.100 rejects --slurp with --jq, so each
+# page's count lands on its own line and awk sums them to a single integer.
+# A naive per-line comparison would misread "0\n0" as a duplicate (false
+# SKIP_DUP) — the awk sum keeps one integer.
 N=$("$GH" api \
     -H "Accept: application/vnd.github+json" \
     "/repos/__OWNER__/__REPO__/pulls/__PR__/reviews" \
-    --paginate --slurp \
-    --jq '[.[][] | select(.commit_id == "'"$SHA"'")] | length')
+    --paginate \
+    --jq '[.[] | select(.commit_id == "'"$SHA"'")] | length' \
+    | awk '{s+=$1} END {print s+0}')
 
 if [ "$N" != "0" ]; then
     echo "SKIP_DUP:$N"
@@ -323,8 +403,8 @@ fi
 
     # One sh -c invocation: the check and the POST share the shell (the
     # resolved gh path is passed as $3 so the binary verified by
-    # _require_gh() is the one actually invoked).
-    cmd = ["sh", "-c", shell_script, "_", payload_path, commit_sha, gh]
+    # _require_gh() is the one actually invoked; $2 carries the FULL SHA).
+    cmd = ["sh", "-c", shell_script, "_", payload_path, sha, gh]
     t0 = time.monotonic()
     try:
         completed = subprocess.run(
@@ -343,7 +423,7 @@ fi
         return PostResult(
             posted=False,
             reason="error",
-            commit_id=commit_sha,
+            commit_id=sha,
             body_with_marker=body_with_marker,
             elapsed_s=elapsed,
             stderr=f"timeout after {timeout_s}s: {e}",
@@ -367,7 +447,7 @@ fi
         return PostResult(
             posted=False,
             reason="error",
-            commit_id=commit_sha,
+            commit_id=sha,
             body_with_marker=body_with_marker,
             elapsed_s=elapsed,
             stderr=stderr,
@@ -379,7 +459,7 @@ fi
         return PostResult(
             posted=False,
             reason="skipped_duplicate",
-            commit_id=commit_sha,
+            commit_id=sha,
             body_with_marker=body_with_marker,
             elapsed_s=elapsed,
             stdout=stdout,
@@ -400,7 +480,7 @@ fi
     return PostResult(
         posted=True,
         reason="posted",
-        commit_id=commit_sha,
+        commit_id=sha,
         review_id=review_id,
         body_with_marker=body_with_marker,
         elapsed_s=elapsed,
