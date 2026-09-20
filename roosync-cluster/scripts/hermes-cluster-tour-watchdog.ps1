@@ -35,9 +35,26 @@
     INDEPENDENT observer: reads everything from the HOST volume, so it keeps
     working when the Hermes container itself is down (exactly when the gap is most
     likely). Sources:
-      - C:\Users\jsboi\.hermes\cron\jobs.json   → job 525e5650a8ac last_run_at
+      - C:\Users\jsboi\.hermes\cron\jobs.json   → job 525e5650a8ac fire anchor:
+        last_dispatch.dispatched_at (START of the run), fallback last_run_at
       - G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md
         → last message block timestamp containing [CLUSTER-HEALTH]
+
+    False positive 2026-09-20 00:37Z (roo-extensions #3743) — DUAL cause, both
+    structural, both verified firsthand (watchdog log + global.md + jobs.json):
+      a. ANCHOR: last_run_at is the END of the job, but ETAPE 3 executes DURING
+         the run — the tour's append is therefore always PRIOR to last_run_at.
+         A window anchored on the end time can never contain the post it watches
+         (fire 00:14:38.955 = last_run_at, T#112 posted 00:14:09.8, 29 s before).
+         Design point 2 below says "POSTERIOR to the START of the watched tour":
+         anchoring on last_dispatch.dispatched_at restores exactly that.
+      b. TITLE REGEX: the tour title format drifted again — since T#112 the
+         append carries tags, rendering "[CLUSTER-HEALTH][DONE] T#112 — ...".
+         The strict "\[CLUSTER-HEALTH\]\s+T#N" pattern matched nothing anymore
+         (last_health=never in the log since 19/09 23:37Z, after the auto-
+         condensation archived the last old-format block T#111), so postOk could
+         not be true regardless of the anchor. The title pattern now tolerates
+         any number of intercalated bracketed tags.
 
     The [WARN] is appended directly to global.md in the same format the
     roo-state-manager writes (### [<ts>] machine|workspace), so every MCP reader
@@ -136,14 +153,24 @@ function Send-Telegram {
     }
 }
 
-# Last cluster-tour fire time from jobs.json (host volume — works container-down).
-function Get-ClusterTourLastRunAt {
+# Cluster-tour fire ANCHOR from jobs.json (host volume — works container-down).
+# Anchor = last_dispatch.dispatched_at (START of the run), NOT last_run_at (END):
+# ETAPE 3 executes during the run, so its [CLUSTER-HEALTH] append is always
+# prior to last_run_at — a window anchored on the end time can structurally
+# never contain the post it watches (roo-extensions #3743). Fallback to
+# last_run_at for jobs.json entries predating the last_dispatch field.
+function Get-ClusterTourFireAnchor {
     if (-not (Test-Path $JobsFile)) { Write-Log "jobs.json not found at $JobsFile" "WARN"; return $null }
     try {
         $data = Get-Content $JobsFile -Raw | ConvertFrom-Json
         foreach ($job in $data.jobs) {
             if ("$($job.id)" -eq $ClusterTourJobId -and $job.name -like "*cluster-tour*") {
-                return ConvertTo-UtcDateTime $job.last_run_at
+                $anchor = $null
+                if ($job.last_dispatch -and $job.last_dispatch.dispatched_at) {
+                    $anchor = ConvertTo-UtcDateTime $job.last_dispatch.dispatched_at
+                }
+                if ($null -eq $anchor) { $anchor = ConvertTo-UtcDateTime $job.last_run_at }
+                return $anchor
             }
         }
         Write-Log "cluster-tour job $ClusterTourJobId not found in jobs.json" "WARN"
@@ -167,14 +194,19 @@ function Get-LastClusterHealthTimestamp {
             $blockBody = $m.Groups[2].Value
             # Match the tour's section TITLE only, NOT a bare mention — the [WARN]
             # body itself says "no append [CLUSTER-HEALTH]" and would otherwise
-            # self-validate as a posted tour. Two title formats exist:
-            #   old (<=T#71): "## [CLUSTER-HEALTH] T#71 — 2026-09-01T12:20Z"
-            #   new (>=T#72): "[CLUSTER-HEALTH] T#72 — Hermes (po-2026), 02/09 00:20Z"
-            # Line-anchored + mandatory "T#<digits>" right after the tag: the WARN
+            # self-validate as a posted tour. Three title formats exist:
+            #   old  (<=T#71):  "## [CLUSTER-HEALTH] T#71 — 2026-09-01T12:20Z"
+            #   new  (>=T#72):  "[CLUSTER-HEALTH] T#72 — Hermes (po-2026), 02/09 00:20Z"
+            #   tags (>=T#112): "[CLUSTER-HEALTH][DONE] T#112 — Hermes po-2026 — 00:14Z"
+            #                   (dashboard append renders the message tags inline)
+            # Line-anchored + mandatory "T#<digits>" after the tag(s): the WARN
             # body only mentions [CLUSTER-HEALTH] mid-line, never as "T#N" at start.
+            # "(?:\[[^\]]+\])*" tolerates any number of intercalated bracketed tags
+            # (roo-extensions #3743: the strict "\s+T#N" successor matched nothing
+            # since T#112, making last_health=never and every verdict MISSING).
             # (Covers roo-extensions #3379's measured format; `\d+` is kept so a
             # malformed bare "T#" mention can never be counted as a tour.)
-            if ($blockBody -match "(?m)^#{0,2}\s*\[CLUSTER-HEALTH\]\s+T#\d+") {
+            if ($blockBody -match "(?m)^#{0,2}\s*\[CLUSTER-HEALTH\](?:\[[^\]]+\])*\s+T#\d+") {
                 $t = ConvertTo-UtcDateTime $m.Groups[1].Value
                 if ($null -ne $t) { $lastTs = $t }
             }
@@ -216,9 +248,9 @@ function Append-GlobalWarn {
 $now = [datetime]::UtcNow
 $state = Get-State
 
-$lastRunAt = Get-ClusterTourLastRunAt
-if ($null -eq $lastRunAt) {
-    Write-Log "No cluster-tour last_run_at — cannot assert (source unavailable, not a MISSING)." "WARN"
+$fireAnchor = Get-ClusterTourFireAnchor
+if ($null -eq $fireAnchor) {
+    Write-Log "No cluster-tour fire anchor — cannot assert (source unavailable, not a MISSING)." "WARN"
     Set-State @{
         LastCheckedRunAt = $state.LastCheckedRunAt
         LastAlertAt      = $state.LastAlertAt
@@ -234,24 +266,27 @@ $lastHealth = Get-LastClusterHealthTimestamp
 # Only assert fires that are old enough for the post to have appeared AND that
 # we have not already checked.
 $prevChecked = ConvertTo-UtcDateTime $state.LastCheckedRunAt
-$isNewFire    = $null -eq $prevChecked -or $lastRunAt -gt $prevChecked
-$fireAgeMin   = ($now - $lastRunAt).TotalMinutes
+$isNewFire    = $null -eq $prevChecked -or $fireAnchor -gt $prevChecked
+$fireAgeMin   = ($now - $fireAnchor).TotalMinutes
 
 $verdict = "SKIP"
 $detail = ""
 if ($isNewFire -and $fireAgeMin -ge $PostMarginMinutes) {
-    $postOk = $null -ne $lastHealth -and $lastHealth -ge $lastRunAt.AddMinutes(-5)
+    # -5 min grace below the anchor: with dispatched_at as anchor the tour post
+    # is by construction posterior to it; the grace only absorbs GDrive sync
+    # skew between the container write and the host-side read of global.md.
+    $postOk = $null -ne $lastHealth -and $lastHealth -ge $fireAnchor.AddMinutes(-5)
     if ($postOk) {
         $verdict = "OK"
-        $detail = "global [CLUSTER-HEALTH] @ $($lastHealth.ToString('o',$Invariant)) >= fire @ $($lastRunAt.ToString('o',$Invariant))"
+        $detail = "global [CLUSTER-HEALTH] @ $($lastHealth.ToString('o',$Invariant)) >= fire @ $($fireAnchor.ToString('o',$Invariant))"
     } else {
         $verdict = "MISSING"
         $lastHealthStr = if ($lastHealth) { $lastHealth.ToString("o", $Invariant) } else { "never" }
-        $detail = "fire @ $($lastRunAt.ToString('o',$Invariant)) -> NO global [CLUSTER-HEALTH] (last seen $lastHealthStr)"
+        $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) -> NO global [CLUSTER-HEALTH] (last seen $lastHealthStr)"
     }
 } elseif ($isNewFire -and $fireAgeMin -lt $PostMarginMinutes) {
     $verdict = "PENDING"
-    $detail = "fire @ $($lastRunAt.ToString('o',$Invariant)) still within ${PostMarginMinutes}min post window"
+    $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) still within ${PostMarginMinutes}min post window"
 } else {
     $detail = "no new fire since last check ($prevChecked)"
 }
@@ -262,7 +297,7 @@ if ($isNewFire -and $fireAgeMin -ge $PostMarginMinutes) {
 # and under ErrorActionPreference=Stop wrote no verdict at every run (roo-extensions
 # #3379). "never" = no tour block ever seen; "none" would be ambiguous vs unreadable.
 $lastHealthStr = if ($null -ne $lastHealth) { $lastHealth.ToString('o', $Invariant) } else { "never" }
-Write-Log "verdict=$verdict | $detail | last_run_at=$($lastRunAt.ToString('o',$Invariant)) | last_health=$lastHealthStr | ok=$($state.OkCount) missing=$($state.MissingCount)"
+Write-Log "verdict=$verdict | $detail | fire_anchor=$($fireAnchor.ToString('o',$Invariant)) | last_health=$lastHealthStr | ok=$($state.OkCount) missing=$($state.MissingCount)"
 
 $okCount    = $state.OkCount
 $missingCount = $state.MissingCount
@@ -279,11 +314,11 @@ if ($verdict -eq "OK") {
         if ((($now - $lastAlert).TotalMinutes) -lt $CooldownMinutes) { $cooldownOk = $false }
     }
 
-    $warnAppended = Append-GlobalWarn $lastRunAt.ToString("o", $Invariant)
+    $warnAppended = Append-GlobalWarn $fireAnchor.ToString("o", $Invariant)
     Write-Log "MISSING: [WARN] appended to global.md (appended=$warnAppended)." $(if ($warnAppended) { "INFO" } else { "ERROR" })
 
     if ($cooldownOk) {
-        $msg = "[CLUSTER-TOUR-WATCHDOG] MISSING — le fire cluster-tour @ $($lastRunAt.ToString('o',$Invariant)) n'a pas posté [CLUSTER-HEALTH] sur global. Verdict count: OK=$okCount MISSING=$missingCount. [WARN] appended on global.md. Voir issue jsboige/hermes-agent #3."
+        $msg = "[CLUSTER-TOUR-WATCHDOG] MISSING — le fire cluster-tour @ $($fireAnchor.ToString('o',$Invariant)) n'a pas posté [CLUSTER-HEALTH] sur global. Verdict count: OK=$okCount MISSING=$missingCount. [WARN] appended on global.md. Voir issue jsboige/hermes-agent #3."
         $sent = Send-Telegram $msg
         Write-Log "Telegram alert sent (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
         $newAlertAt = $now.ToString("o", $Invariant)
@@ -293,7 +328,7 @@ if ($verdict -eq "OK") {
 }
 
 Set-State @{
-    LastCheckedRunAt = if ($isNewFire) { $lastRunAt.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
+    LastCheckedRunAt = if ($isNewFire) { $fireAnchor.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
     LastAlertAt      = $newAlertAt
     OkCount          = $okCount
     MissingCount     = $missingCount
