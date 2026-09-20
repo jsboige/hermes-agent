@@ -377,14 +377,16 @@ Auth: `Authorization: Bearer ${MCP_AUTH_TOKEN}` from `.env.secrets`.
 **Why:** The `hermes-cluster-tour` cron (job `525e5650a8ac`, `13 */12 * * *`) must append a `[CLUSTER-HEALTH]` post on the `global` dashboard at every fire (prompt ETAPE 3, marked OBLIGATOIRE/INCONDITIONNEL). It has skipped that post **silently and non-deterministically** while reporting `status=ok` ("completed successfully") — 2 incidents (2026-08-11 ~38h, 2026-08-14 ~48h), 4 consecutive fires post-T#40 without a global post. Prompt-side emphasis cannot close a prompt-skipping defect; only a programmatic post-fire check can (issue jsboige/hermes-agent #3, design validated by ai-01 in 5 points).
 
 **Watchdog:** `roosync-cluster/scripts/hermes-cluster-tour-watchdog.ps1` — independent observer, same pattern as `hermes-review-watchdog.ps1`. Reads everything from the HOST volume so it works even when the container is down:
-- `C:\Users\jsboi\.hermes\cron\jobs.json` → cluster-tour `last_run_at` (the watched fire)
-- `G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md` → last message block whose section TITLE matches `## [CLUSTER-HEALTH]`
+- `C:\Users\jsboi\.hermes\cron\jobs.json` → cluster-tour fire anchor: `last_dispatch.dispatched_at` (run START; fallback `last_run_at` — #3743: ETAPE 3 executes during the run, so the tour post is always PRIOR to `last_run_at` = job END)
+- `G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md` → last message block whose section TITLE matches `[CLUSTER-HEALTH]…T#N` (tag-tolerant)
 
 Assertion: when a new fire is older than 15 min, a `[CLUSTER-HEALTH]` title must be timestamped ≥ fire −5 min, else MISSING → appends a `[WARN]` directly on `global.md` (visible exactly where the post should have been, read by every cluster MCP agent) + Telegram alert to the review chat (cooldown 120 min). Never re-fires the tour (spec point 4). Counts OK/MISSING in a state file to instrument the rate (spec point 5).
 
 Deployed as Windows Scheduled Task `Hermes-ClusterTour-Watchdog` (every 30 min off-minute `:07/:37`, via hidden VBS launcher in `C:\ProgramData\claude-hidden-launchers\`), so a fire at 12:13Z is checked by ~12:37Z.
 
 **Gotcha (fixed):** the `[WARN]` body text contains the literal string "[CLUSTER-HEALTH]" ("aucun append [CLUSTER-HEALTH]") — the parser matches the section TITLE (`## [CLUSTER-HEALTH]`) only, otherwise the WARN self-validates as a posted tour.
+
+**Gotcha (fixed #3743, 2026-09-20):** the tour title format has drifted twice (`[CLUSTER-HEALTH] T#72` at T#72, then `[CLUSTER-HEALTH][DONE] T#112` at T#112 when dashboard appends render message tags inline) — after the second drift + a condensation archiving the last old-format block, `last_health` read `never` and EVERY verdict was a false MISSING. The title matcher now tolerates any number of intercalated bracketed tags; treat future title changes as a watchdog compatibility surface.
 
 ### Cluster ASR
 
