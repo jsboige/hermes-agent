@@ -2,7 +2,7 @@
 
 **Workspace:** Hermes (opérateur Claude Code po-2026)
 **Usage:** `/surveillance` — à la demande, ou via le cron session 12h (self-re-arm)
-**Cadence cron :** `17 */12 * * *` (00:17 / 12:17 UTC, off-minute volontaire)
+**Cadence cron :** `17 */12 * * *` (00:17 / 12:17 **heure locale** Paris = 22:17/10:17 UTC, off-minute volontaire — les crons session CronCreate tirent en heure LOCALE, les logs conteneur sont en UTC)
 
 Ce fichier est la **source de vérité** de la routine de surveillance Hermes 12h.
 Le cron (CronCreate, session-only) invoque cette commande puis se réarme.
@@ -90,6 +90,10 @@ Verdict : NOMINAL / WATCH / ALERT.
 
 Si le service est HS (container down, crash loop, gateway mort, mounts cassés) :
 **rétablis immédiatement, sans demander la permission** — c'est la priorité de l'opérateur.
+
+**AVANT tout geste sur présomption de wedge** : `docker exec hermes date -u` + mtime `agent.log`.
+Near-miss 22/09 : 2 h de décalage (cron session = heure locale Paris, logs conteneur = UTC) ont fait
+lire « gateway wedgé, 4 crons ratés » sur un service sain à jour à la minute — SIGTERM évité de justesse.
 Gestes documentés : docker run (CLAUDE.md §Deployment), SIGTERM gateway + drain (PAS SIGUSR1 post-sync 08-23),
 recreate compose. L'auto-backup boot couvre le recreate même image. Rapport APRÈS action.
 
