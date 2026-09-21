@@ -186,10 +186,10 @@ Three config loaders exist — know which one you're in:
 docker run -d --name hermes `
   --restart unless-stopped `
   -v C:\Users\jsboi\.hermes:/opt/data `
-  -v C:\dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
+  -v D:\Dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
   --add-host=host.docker.internal:host-gateway `
   -p 9120:9119 `
-  hermes-agent:s6-sync-20260602 gateway run
+  hermes-agent:s6-sync-20260906 gateway run
 ```
 
 **NOTE:** Use PowerShell (not Git Bash) for `docker run` — Git Bash path conversion breaks `-v` mount targets.
@@ -301,10 +301,10 @@ docker rm hermes
 docker run -d --name hermes `
   --restart unless-stopped `
   -v C:\Users\jsboi\.hermes:/opt/data `
-  -v C:\dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
+  -v D:\Dev\roo-extensions\mcps\internal\servers\roo-state-manager:/opt/roo-state-manager:ro `
   --add-host=host.docker.internal:host-gateway `
   -p 9120:9119 `
-  hermes-agent:pre-sync-20260602 gateway run
+  hermes-agent:s6-sync-20260823 gateway run
 ```
 
 ### Backup protocol

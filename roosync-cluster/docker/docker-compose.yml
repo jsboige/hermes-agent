@@ -14,8 +14,8 @@ services:
       - "9092:9090"
     volumes:
       - ./mcp-proxy/config.json:/config/config.json:ro
-      - C:/dev/roo-extensions/mcps/internal/servers/sk-agent/sk_agent_config.json:/opt/sk-agent/sk_agent_config.json:ro
-      - C:/dev/roo-extensions/mcps/internal/servers/roo-state-manager:/opt/roo-state-manager:ro
+      - D:/Dev/roo-extensions/mcps/internal/servers/sk-agent/sk_agent_config.json:/opt/sk-agent/sk_agent_config.json:ro
+      - D:/Dev/roo-extensions/mcps/internal/servers/roo-state-manager:/opt/roo-state-manager:ro
     extra_hosts:
       - host.docker.internal:host-gateway
     healthcheck:
