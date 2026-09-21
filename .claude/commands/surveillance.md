@@ -1,8 +1,12 @@
-# Routine de surveillance Hermes 12h (opérateur Claude Code po-2026)
+# Command: /surveillance
 
-Ce fichier est la **source de vérité** de la routine exécutée par le cron de surveillance 12h.
-Le cron (CronCreate) est un wrapper mince qui lit ce fichier, l'exécute, puis se réarme.
-MODIFIE CE FICHIER pour changer la routine — le cron le relit à chaque fire.
+**Workspace:** Hermes (opérateur Claude Code po-2026)
+**Usage:** `/surveillance` — à la demande, ou via le cron session 12h (self-re-arm)
+**Cadence cron :** `17 */12 * * *` (00:17 / 12:17 UTC, off-minute volontaire)
+
+Ce fichier est la **source de vérité** de la routine de surveillance Hermes 12h.
+Le cron (CronCreate, session-only) invoque cette commande puis se réarme.
+MODIFIE CE FICHIER pour changer la routine — le cron la recharge à chaque fire.
 
 ---
 
@@ -26,7 +30,7 @@ Identifie : le dernier `[STATUS 12h]`, le dernier Tour `[CLUSTER-HEALTH] T#N` su
 1. **Container Hermes** :
    `docker ps --filter name=hermes --format "{{.Status}} | {{.Image}}"`
    `docker inspect hermes --format "{{.RestartCount}} restarts, started {{.State.StartedAt}}"`
-   Image attendue : `s6-sync-20260811`. Red flag : RestartCount > 3 ou Status pas "Up".
+   Image attendue : `s6-sync-YYYYMMDD` (dernière déployée 2026-09-06 = `s6-sync-20260906`). Red flag : RestartCount > 3 ou Status pas "Up".
 
 2. **Gateway PID vivant** :
    `docker exec hermes sh -c "pgrep -f 'gateway run' | head -1"`
@@ -108,5 +112,5 @@ Il doit toujours y avoir **exactement 1** job de surveillance (pas d'accumulatio
 ### Wrapper à recopier verbatim dans le CronCreate
 
 ```
-Cron surveillance Hermes 12h (opérateur Claude Code po-2026). Lis et exécute la routine dans : c:\dev\hermes-agent\.claude\cron-surveillance-prompt.md (recharge les dashboards, 8 vérifications dont check 8 lecture des messages des bots, post [STATUS 12h] sur workspace-hermes-agent, escalade seulement si container down / reviews >4h / NanoClaw >36h / global >36h / bus MCP down). FIN : self-re-arm obligatoire — CronList, CronDelete tous les jobs de surveillance, CronCreate('17 */12 * * *', <CE MÊME WRAPPER verbatim>, recurring:true), note le nouveau job ID dans le post.
+/surveillance — cron Hermes 12h (opérateur Claude Code po-2026). Exécute la commande /surveillance (routine complète : .claude/commands/surveillance.md — recharge dashboards, 8 vérifications dont check 8 lecture des messages des bots, post [STATUS 12h] sur workspace-hermes-agent, escalade seulement si container down / reviews >4h / NanoClaw >36h / global >36h / bus MCP down). FIN : self-re-arm obligatoire — CronList, CronDelete tous les jobs de surveillance, CronCreate('17 */12 * * *', <CE MÊME WRAPPER verbatim>, recurring:true), note le nouveau job ID dans le post.
 ```
