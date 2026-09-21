@@ -86,8 +86,16 @@ Verdict : NOMINAL / WATCH / ALERT.
 <Points d'attention éventuels>
 ```
 
+## Rétablissement autonome (MANDAT USER 21/09 — priorité)
+
+Si le service est HS (container down, crash loop, gateway mort, mounts cassés) :
+**rétablis immédiatement, sans demander la permission** — c'est la priorité de l'opérateur.
+Gestes documentés : docker run (CLAUDE.md §Deployment), SIGTERM gateway + drain (PAS SIGUSR1 post-sync 08-23),
+recreate compose. L'auto-backup boot couvre le recreate même image. Rapport APRÈS action.
+
 ## Escalade (UNIQUEMENT si)
 
+L'escalade est une **notification après action** — jamais une demande d'autorisation de rétablir.
 PushNotification + `roosync_send(to: "myia-ai-01", ...)` si l'une de :
 - (a) container down OU restart spiral (>3 restarts sur la fenêtre)
 - (b) reviews bot stoppées > 4h
