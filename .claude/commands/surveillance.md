@@ -53,7 +53,12 @@ Identifie : le dernier `[STATUS 12h]`, le dernier Tour `[CLUSTER-HEALTH] T#N` su
 6. **Fraîcheur NanoClaw + bus RooSync (capabilité)** :
    `roosync_dashboard(action: "read", type: "workspace", workspace: "nanoclaw", section: "status")`
    lastModified : <14h OK, 14-36h WARN, >36h ERROR.
-   **PIÈGE (incident 12→15/08)** : la fraîcheur de workspace-nanoclaw est polluée par les posts opérateur d'ai-01 — elle ne prouve PAS que le bot NanoClaw écrit. Le signal du bus = le dernier write d'un BOT sur `workspace-cluster-coordination`. Pour Hermes : dernier message de `po-2026|hermes-agent` sur cluster-coordination < 2h → write path MCP OK. > 2h pendant que les reviews sont actives → write MCP cassé (bus down) → WARN/ERROR.
+   **PIÈGE (incident 12→15/08)** : la fraîcheur de workspace-nanoclaw est polluée par les posts opérateur d'ai-01 — elle ne prouve PAS que le bot NanoClaw écrit.
+   **Le signal du bus est la CAPACITÉ, pas la cadence de post (corrigé 22/09).** Ne JAMAIS déduire une panne de bus de l'absence de post bot sur `workspace-cluster-coordination` : le prompt `hermes-inbox-poll` rend le post **conditionnel** (« bilan substantiel si delta notable », « toujours poster si tu as répondu à un signal », Telegram « silence si RAS »). Une absence de post pendant des heures est un état SAIN — le seuil « >2h » produisait des faux positifs (22/09 : 11,5 h de silence attribuées à tort à un bus mort ; coût : ~8 vérifications).
+   Tester la capacité au lieu de la déduire :
+   - **Sonde write opérateur** : `roosync_dashboard append` d'un court `[INFO]` sur une clé peu exposée, puis vérifier `success: true` et `messageCount` incrémenté (`writeMs` ~130 ms). C'est la preuve directe que le chemin d'écriture vit.
+   - **Lectures récentes du bot** : `docker exec hermes sh -c "grep '<date>' /opt/data/logs/agent.log | grep 'roosync_dashboard completed'"` — un read volumineux récent (20-60 KB) prouve que le bridge du bot vit. Attention : un résultat COURT (100-500 chars) est le plus souvent un **read vide**, pas un append échoué — vérifier l'appel (`tool_calls` dans `state.db`) avant de conclure.
+   - Escalade (e) seulement si la sonde échoue, OU si les lectures du bot s'interrompent, OU si le bot signale lui-même une dégradation (check 8).
 
 7. **Cluster-tour global** :
    Vérifie dans le global dashboard lu en début : le `[CLUSTER-HEALTH] T#N` le plus récent.
@@ -105,7 +110,7 @@ PushNotification + `roosync_send(to: "myia-ai-01", ...)` si l'une de :
 - (b) reviews bot stoppées > 4h
 - (c) NanoClaw dashboard > 36h
 - (d) cluster-tour global > 36h
-- (e) bus MCP du bot down : dernier write bot sur cluster-coordination > 2h (reviews actives) OU patterns de plainte visibles (check 8) — la capacité MCP est un prérequis à la mission, pas un détail
+- (e) bus MCP du bot down : sonde write opérateur EN ÉCHEC, OU lectures du bot interrompues, OU patterns de plainte visibles (check 8) — la capacité MCP est un prérequis à la mission, pas un détail. (L'absence de post bot n'est PAS un signal : cf. check 6.)
 
 Sinon : **PAS d'escalade** (PushNotification/roosync_send non justifiés — nominal).
 
