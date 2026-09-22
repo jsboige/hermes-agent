@@ -41,7 +41,9 @@ $ErrorActionPreference = "Stop"
 
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
-    $timestamp = Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ"
+    # UTC real: a literal 'Z' suffix on local time poisoned the backoff math
+    # (Parse() trusts the Z, making timeSinceRecovery negative by the TZ offset).
+    $timestamp = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
     $entry = "[$timestamp] [$Level] $Message"
     Write-Output $entry
     $logDir = Split-Path $LogPath -Parent
@@ -143,7 +145,7 @@ if ($lastRecovery) {
             Set-State @{
                 ConsecutiveFailures = ($consecutiveFailures + 1)
                 LastRecovery        = $lastRecovery
-                LastFailure         = (Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ')
+                LastFailure         = ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))
             }
             exit 0
         }
@@ -195,6 +197,6 @@ if (-not $recovered) {
 # Update state
 Set-State @{
     ConsecutiveFailures = ($consecutiveFailures + 1)
-    LastRecovery        = if ($recovered) { Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ' } else { $lastRecovery }
-    LastFailure         = Get-Date -Format 'yyyy-MM-ddTHH:mm:ssZ'
+    LastRecovery        = if ($recovered) { (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } else { $lastRecovery }
+    LastFailure         = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
 }
