@@ -588,6 +588,61 @@ else:
 fi
 
 
+# 5f. Idempotent: CoursIA README-totals review rule in pr-review prompt.
+# 2026-09-24: arbitrage user relayed by ai-01|CoursIA on the global dashboard (ASK 08:50Z).
+# ai-01 merged jsboige/CoursIA#17029 (a README totals bump) that should never have passed;
+# user verbatim: "on n'a trop laisse passer de ces MAJ de totaux qui sont sans fin et inutiles".
+# The rule lands in CoursIA .claude/rules/pr-review-discipline.md via PR #17633 (still open),
+# so it is inlined here to take effect immediately and to survive rebuilds.
+# Normalize (strip then re-append) instead of a marker-guarded append: the first live
+# attempt keyed on a marker whose text never matched the injected heading, so the block
+# was appended again on every run (observed 2026-09-24: two copies in jobs.json).
+# No backticks in BLOCK: this python source sits inside a double-quoted bash string,
+# so backticks would be command-substituted by the shell before python ever sees them.
+echo "  -> Checking README-totals directive in pr-review prompt"
+if [ -f "$DATA/cron/jobs.json" ]; then
+python3 -c "
+import json, re
+path = '$DATA/cron/jobs.json'
+with open(path, 'r') as f:
+    data = json.load(f)
+BLOCK = (
+    '\n\n## DIRECTIVE README-TOTALS CoursIA #17633 (arbitrage user 2026-09-24)\n\n'
+    '**PR de README CoursIA dont la substance est une mise a jour de TOTAUX** (nombre de '
+    'notebooks, comptes par langage ou sous-dossier, comptes de cellules, bandeaux \"N notebooks\") '
+    '-> **CHANGES_REQUESTED**. Ces chiffres relevent de la regeneration du catalogue '
+    '(CATALOG-STATUS, #2651) : une ligne de compte fausse se SUPPRIME, elle ne se remet pas a jour. '
+    'Cette regle PRIME sur l ancien point E \"audit fichier entier des comptes\" de '
+    'pr-review-discipline.md : on n encadre pas ces PRs, on les ecarte.\n'
+    '**Apres l ajout d un notebook, une PR de README doit livrer le CORPS qui presente ce '
+    'notebook** : sa section, ses lignes de navigation, les acquis et les parcours, fidele au '
+    'notebook. Une PR de README qui ne bouge que des comptes est CHANGES_REQUESTED.\n'
+    'Source canonique : \".claude/rules/pr-review-discipline.md\" sur jsboige/CoursIA@main '
+    '(lecture : gh api repos/jsboige/CoursIA/contents/.claude/rules/pr-review-discipline.md '
+    '--jq .content | base64 -d) - PR de harnais #17633. Directive inline : elle precede le merge '
+    'et reste valable meme si #17633 n est pas encore mergee. Exemple fondateur : #17029 '
+    '(mergee a tort, revert #17632).\n'
+)
+ANCHOR = '\n## CHECKLIST REVIEW (par PR)'
+changed = False
+for job in data.get('jobs', []):
+    if job.get('name') == 'hermes-pr-review':
+        orig = job.get('prompt', '')
+        p = re.sub(r'\n+## DIRECTIVE README-TOTALS CoursIA #17633.*?(?=\n+## |\Z)', '', orig, flags=re.S)
+        p = p.replace(ANCHOR, BLOCK + ANCHOR, 1) if ANCHOR in p else p + BLOCK
+        if p != orig:
+            job['prompt'] = p
+            changed = True
+if changed:
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print('  -> README-totals directive (re)applied to pr-review prompt')
+else:
+    print('  -> README-totals directive already canonical (no-op)')
+" 2>/dev/null || echo "  -> Warning: could not check README-totals directive"
+fi
+
+
 # 6. Install croniter
 echo "  -> Checking croniter"
 /opt/hermes/.venv/bin/python3 -c 'import croniter' 2>/dev/null && echo "  -> croniter already installed" || {
