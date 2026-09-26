@@ -652,3 +652,184 @@ def test_post_review_propagates_head_lookup_failure(monkeypatch):
     assert result.posted is False
     assert result.reason == "error"
     assert "not found" in result.stderr
+
+
+# --- Signed markers (#3476 follow-up: forge-resistant attribution) ---------
+
+# Hermeticity: every pre-existing test asserts the exact UNSIGNED marker
+# string. Once the module signs whenever a key is loadable, those assertions
+# would depend on whether the host running the tests holds the container key
+# file (/opt/data/hermes-ops/guard/attribution.key exists in the po-2026
+# container). Pin the env override to a guaranteed-missing path by default;
+# tests that WANT a key use the ``attribution_key`` fixture below, which
+# overrides this after setup (autouse fixtures instantiate first).
+@pytest.fixture(autouse=True)
+def _no_attribution_key_by_default(tmp_path, monkeypatch):
+    absent = tmp_path / "absent-attribution.key"
+    monkeypatch.setenv("HERMES_ATTRIBUTION_KEY", str(absent).replace("\\", "/"))
+
+
+@pytest.fixture()
+def attribution_key(_no_attribution_key_by_default, tmp_path, monkeypatch):
+    key = tmp_path / "attribution.key"
+    key.write_text("ab" * 32, encoding="utf-8")  # 32 bytes — deploy shape
+    monkeypatch.setenv("HERMES_ATTRIBUTION_KEY", str(key).replace("\\", "/"))
+    return key
+
+
+def test_signed_marker_appended_when_key_present(attribution_key):
+    out = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    assert re.search(r"\[Hermes L, cycle :05 27/09, host H, sig=[0-9a-f]{8}\]$",
+                     out.rstrip())
+    verdict = guard.verify_attribution(out, pr=42, sha="a" * 40)
+    assert verdict.marker_present and verdict.signed
+    assert verdict.key_available and verdict.signature_valid
+    assert verdict.lane == "L" and verdict.cycle == ":05 27/09"
+    assert verdict.host == "H"
+
+
+def test_verify_rejects_replay_on_other_pr_or_sha(attribution_key):
+    """The anti-replay property: pr/sha are MAC inputs, not line content —
+    a marker copied to another PR/commit fails verification."""
+    out = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=1, sha="a" * 40,
+    )
+    assert not guard.verify_attribution(out, pr=2, sha="a" * 40).signature_valid
+    assert not guard.verify_attribution(out, pr=1, sha="b" * 40).signature_valid
+    # Omitting the MAC'd pr/sha also mismatches (empty vs original fields).
+    assert not guard.verify_attribution(out).signature_valid
+
+
+def test_missing_key_degrades_to_unsigned(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "HERMES_ATTRIBUTION_KEY",
+        str(tmp_path / "never-created.key").replace("\\", "/"),
+    )
+    out = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    assert out.rstrip().endswith("[Hermes L, cycle :05 27/09, host H]")
+    verdict = guard.verify_attribution(out, pr=42, sha="a" * 40)
+    assert verdict.marker_present and not verdict.signed
+
+
+def test_garbage_key_degrades_to_unsigned_never_raises(tmp_path, monkeypatch):
+    short = tmp_path / "too-short.key"
+    short.write_text("abcde", encoding="utf-8")  # < 16 bytes
+    monkeypatch.setenv("HERMES_ATTRIBUTION_KEY", str(short).replace("\\", "/"))
+    out = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    assert "sig=" not in out
+
+
+def test_signed_marker_is_idempotent(attribution_key):
+    once = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    twice = guard.append_attribution_marker(
+        once, lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    assert once == twice
+    assert len(re.findall(r"\[Hermes[^\]]*\]", twice)) == 1
+
+
+def test_legacy_unsigned_marker_not_upgraded_in_place(attribution_key):
+    """A body already ending with a pre-signing marker stays verbatim — the
+    guard never edits an existing body, it only appends when absent."""
+    legacy = "body\n\n[Hermes L, cycle :05 27/09, host H]\n"
+    out = guard.append_attribution_marker(
+        legacy, lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    assert out == legacy
+    verdict = guard.verify_attribution(out, pr=42, sha="a" * 40)
+    assert verdict.marker_present and not verdict.signed
+
+
+def test_verify_without_key_reports_unverifiable_not_forged(
+        attribution_key, tmp_path, monkeypatch):
+    """Sweeping from a host without the key: signed marker, no local key →
+    key_available=False. That means CANNOT verify — distinct from an
+    actually-invalid signature."""
+    signed = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    monkeypatch.setenv(
+        "HERMES_ATTRIBUTION_KEY",
+        str(tmp_path / "absent-here.key").replace("\\", "/"),
+    )
+    verdict = guard.verify_attribution(signed, pr=42, sha="a" * 40)
+    assert verdict.signed and not verdict.key_available
+    assert not verdict.signature_valid
+
+
+def test_tampered_signature_is_invalid(attribution_key):
+    signed = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+    m = re.search(r"sig=([0-9a-f]{8})", signed)
+    flipped = "0" if m.group(1)[0] != "0" else "1"
+    tampered = signed.replace(
+        m.group(0), f"sig={flipped}{m.group(1)[1:]}"
+    )
+    verdict = guard.verify_attribution(tampered, pr=42, sha="a" * 40)
+    assert verdict.signed and verdict.key_available
+    assert not verdict.signature_valid
+
+
+@pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
+def test_post_path_signs_resolved_full_oid(stub_gh, attribution_key,
+                                           monkeypatch):
+    """End-to-end: short-SHA input + key present → the POSTed marker's sig
+    verifies against the PR number and the RESOLVED full OID (MAC over a
+    truncated SHA would never verify on sweep)."""
+    monkeypatch.setenv("GH_STUB_FULL_SHA", _FULL382)
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863, "38287ac491cc",
+        "verdict LGTM-side", lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is True, (
+        f"reason={result.reason!r} stderr={result.stderr!r}"
+    )
+    payload = json.loads(stub_gh.payload_copy.read_text(encoding="utf-8"))
+    verdict = guard.verify_attribution(
+        payload["body"], pr=14863, sha=_FULL382,
+    )
+    assert verdict.signed and verdict.signature_valid
+    # The sig was computed over the FULL OID, not the short input.
+    assert not guard.verify_attribution(
+        payload["body"], pr=14863, sha="38287ac491cc",
+    ).signature_valid
+
+
+def test_cli_verify_marker_exit_codes(attribution_key, monkeypatch, capsys):
+    import io as _io
+
+    good = guard.append_attribution_marker(
+        "body", lane="L", host="H", cycle=":05 27/09", pr=42, sha="a" * 40,
+    )
+
+    def _run(body, *argv):
+        monkeypatch.setattr("sys.stdin", _io.StringIO(body))
+        code = guard._cli_verify_marker(list(argv))
+        out = capsys.readouterr().out
+        return code, json.loads(out)
+
+    code, v = _run(good, "--pr", "42", "--sha", "a" * 40)
+    assert code == 0 and v["signature_valid"] is True
+
+    code, v = _run("body\n\n[Hermes L, cycle :05 27/09, host H]\n")
+    assert code == 1 and v["signed"] is False
+
+    code, v = _run("no marker at all")
+    assert code == 3 and v["marker_present"] is False
+
+    def _flip(mo):
+        first = mo.group(1)[0]
+        return "sig=" + ("0" if first != "0" else "1") + mo.group(1)[1:]
+
+    tampered = re.sub(r"sig=([0-9a-f]{8})", _flip, good)
+    code, v = _run(tampered, "--pr", "42", "--sha", "a" * 40)
+    assert code == 2 and v["signature_valid"] is False
