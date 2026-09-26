@@ -204,8 +204,13 @@ def _load_attribution_key() -> Optional[bytes]:
     means "emit an unsigned marker" — never an exception, never a blocked
     POST.
     """
+    path = _attribution_key_path()
     try:
-        with open(_attribution_key_path(), "rb") as fh:
+        # Key material is arbitrary bytes (hex at deploy time) — binary mode
+        # by design; the path is hoisted so the windows-footguns checker's
+        # open() regex can see the "rb" mode (a call expression as the first
+        # argument blinds its mode group).
+        with open(path, "rb") as fh:
             key = fh.read().strip()
     except OSError:
         return None
