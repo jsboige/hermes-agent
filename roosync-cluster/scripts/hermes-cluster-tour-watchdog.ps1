@@ -40,6 +40,16 @@
       - G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md
         → last message block timestamp containing [CLUSTER-HEALTH]
 
+    False positive 2026-09-27 12:37Z — MIRROR LAG: the T#127 post (block ts
+    12:18:11Z, ~5 min after the fire) reached the G: DriveFS copy only between
+    12:37Z and 14:37Z (Drive pressure during the quota crisis); the watchdog
+    read global.md before the sync landed and fired a spurious [WARN] +
+    Telegram alert. Guard: a MISSING verdict is now CONFIRMED ACROSS TWO CHECK
+    CYCLES (two-strike) — the first missing defers the alert one 30-min cycle,
+    keeping the fire "unchecked" so the next run re-asserts it; the post
+    usually appears meanwhile (verified: the 14:37Z run saw
+    last_health=12:18:11Z and the repaired title regex matched it).
+
     False positive 2026-09-20 00:37Z (roo-extensions #3743) — DUAL cause, both
     structural, both verified firsthand (watchdog log + global.md + jobs.json):
       a. ANCHOR: last_run_at is the END of the job, but ETAPE 3 executes DURING
@@ -125,7 +135,7 @@ function Get-State {
     if (Test-Path $StateFile) {
         try { return Get-Content $StateFile -Raw | ConvertFrom-Json } catch { }
     }
-    return @{ LastCheckedRunAt = $null; LastAlertAt = $null; OkCount = 0; MissingCount = 0; LastRun = $null }
+    return @{ LastCheckedRunAt = $null; LastAlertAt = $null; OkCount = 0; MissingCount = 0; PendingMissingAnchor = $null; LastRun = $null }
 }
 
 function Set-State {
@@ -259,6 +269,7 @@ if ($null -eq $fireAnchor) {
         LastAlertAt      = $state.LastAlertAt
         OkCount          = $state.OkCount
         MissingCount     = $state.MissingCount
+        PendingMissingAnchor = $state.PendingMissingAnchor
         LastRun          = $now.ToString("o", $Invariant)
     }
     exit 0
@@ -271,6 +282,9 @@ $lastHealth = Get-LastClusterHealthTimestamp
 $prevChecked = ConvertTo-UtcDateTime $state.LastCheckedRunAt
 $isNewFire    = $null -eq $prevChecked -or $fireAnchor -gt $prevChecked
 $fireAgeMin   = ($now - $fireAnchor).TotalMinutes
+# PendingMissingAnchor = fire already judged MISSING once, awaiting the
+# confirmation strike (two-strike guard against G: mirror lag).
+$pendingAnchor = "$($state.PendingMissingAnchor)"
 
 $verdict = "SKIP"
 $detail = ""
@@ -282,10 +296,19 @@ if ($isNewFire -and $fireAgeMin -ge $PostMarginMinutes) {
     if ($postOk) {
         $verdict = "OK"
         $detail = "global [CLUSTER-HEALTH] @ $($lastHealth.ToString('o',$Invariant)) >= fire @ $($fireAnchor.ToString('o',$Invariant))"
-    } else {
+    } elseif ($pendingAnchor -eq $fireAnchor.ToString("o", $Invariant)) {
+        # Second consecutive missing for the SAME fire -> confirmed.
         $verdict = "MISSING"
         $lastHealthStr = if ($lastHealth) { $lastHealth.ToString("o", $Invariant) } else { "never" }
-        $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) -> NO global [CLUSTER-HEALTH] (last seen $lastHealthStr)"
+        $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) -> NO global [CLUSTER-HEALTH] (last seen $lastHealthStr) — CONFIRMED on 2nd check"
+    } else {
+        # First missing: defer the alert one 30-min check cycle — the G: mirror
+        # can lag the container write well past PostMarginMinutes under Drive
+        # pressure (2026-09-27 12:37Z: post 12:18Z, mirror caught up by 14:37Z).
+        # LastCheckedRunAt stays put so the next run still sees this fire as new.
+        $verdict = "MISSING-PENDING"
+        $lastHealthStr = if ($lastHealth) { $lastHealth.ToString("o", $Invariant) } else { "never" }
+        $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) -> no global [CLUSTER-HEALTH] yet (last seen $lastHealthStr) — confirmation next check"
     }
 } elseif ($isNewFire -and $fireAgeMin -lt $PostMarginMinutes) {
     $verdict = "PENDING"
@@ -305,6 +328,7 @@ Write-Log "verdict=$verdict | $detail | fire_anchor=$($fireAnchor.ToString('o',$
 $okCount    = $state.OkCount
 $missingCount = $state.MissingCount
 $newAlertAt = $state.LastAlertAt
+$newPending = $null
 
 if ($verdict -eq "OK") {
     $okCount = [int]$state.OkCount + 1
@@ -328,12 +352,24 @@ if ($verdict -eq "OK") {
     } else {
         Write-Log "Alert suppressed (cooldown ${CooldownMinutes}min not elapsed)." "INFO"
     }
+} elseif ($verdict -eq "MISSING-PENDING") {
+    $newPending = $fireAnchor.ToString("o", $Invariant)
+    Write-Log "MISSING-PENDING: alert deferred one check cycle (G: mirror-lag guard) — no [WARN] yet." "INFO"
+}
+
+# LastCheckedRunAt advances only on a CLOSED verdict (OK or confirmed MISSING):
+# a first-strike MISSING must keep the fire "new" so the next 30-min run
+# re-asserts it (confirmation strike).
+$checkedRunAt = $state.LastCheckedRunAt
+if (($verdict -eq "OK" -or $verdict -eq "MISSING") -and $isNewFire) {
+    $checkedRunAt = $fireAnchor.ToString("o", $Invariant)
 }
 
 Set-State @{
-    LastCheckedRunAt = if ($isNewFire) { $fireAnchor.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
+    LastCheckedRunAt = $checkedRunAt
     LastAlertAt      = $newAlertAt
     OkCount          = $okCount
     MissingCount     = $missingCount
+    PendingMissingAnchor = $newPending
     LastRun          = $now.ToString("o", $Invariant)
 }
