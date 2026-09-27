@@ -294,6 +294,17 @@ _STUB_GH = r"""#!/bin/sh
 printf '%s\n' "---CALL---" >> "$GH_STUB_LOG"
 for a in "$@"; do printf '%s\n' "$a" >> "$GH_STUB_LOG"; done
 case " $* " in
+  *" user "*)
+    # Account-identity probe (gh api user --jq .login). GH_STUB_LOGIN is the
+    # login to report; GH_STUB_LOGIN_FAIL=1 simulates an auth/network
+    # failure (exit 1 -> the guarded shell dies under set -eu -> refusal).
+    if [ -n "${GH_STUB_LOGIN_FAIL:-}" ]; then
+      echo "stub api user failure" >&2
+      exit 1
+    fi
+    echo "${GH_STUB_LOGIN:-jsboige}"
+    exit 0
+    ;;
   *" -X POST "*)
     if [ -n "${GH_STUB_SLEEP:-}" ]; then sleep "$GH_STUB_SLEEP"; fi
     if [ -n "${GH_STUB_POST_FAIL:-}" ]; then
@@ -346,6 +357,9 @@ def stub_gh(tmp_path, monkeypatch):
     monkeypatch.delenv("GH_STUB_SLEEP", raising=False)
     monkeypatch.delenv("GH_STUB_POST_FAIL", raising=False)
     monkeypatch.delenv("GH_STUB_FULL_SHA", raising=False)
+    monkeypatch.setenv("HERMES_EXPECTED_LOGIN", "jsboige")
+    monkeypatch.delenv("GH_STUB_LOGIN", raising=False)
+    monkeypatch.delenv("GH_STUB_LOGIN_FAIL", raising=False)
 
     class _Stub:
         def __init__(self):
@@ -382,8 +396,11 @@ def test_real_snippet_posts_with_stub_gh(stub_gh, monkeypatch):
     assert result.review_id == 424242
 
     calls = stub_gh.calls()
-    assert len(calls) == 2, f"expected GET + POST, saw {calls}"
-    get_args, post_args = calls
+    assert len(calls) == 3, f"expected identity + GET + POST, saw {calls}"
+    id_args, get_args, post_args = calls
+    # Identity probe: gh api user, before any review traffic.
+    assert "user" in id_args
+    assert "--jq" in id_args
     # GET: reviews endpoint, paginated; per-page counts summed by awk.
     assert "/repos/jsboige/CoursIA/pulls/14863/reviews" in get_args
     assert "--paginate" in get_args
@@ -443,8 +460,11 @@ def test_real_snippet_skips_when_aggregated_count_nonzero(stub_gh, monkeypatch):
     # concatenated: "2\n2" must aggregate to 4, not read as a duplicate
     # string).
     assert result.stdout.strip() == "SKIP_DUP:4"
-    # No POST call was issued at all.
-    assert len(stub_gh.calls()) == 1
+    # No POST call was issued at all (identity probe + GET only).
+    assert len(stub_gh.calls()) == 2
+    assert not any(
+        "-X" in c and "POST" in c for c in stub_gh.calls()
+    )
 
 
 @pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
@@ -574,8 +594,10 @@ def test_real_snippet_short_sha_resolved_via_stub(stub_gh, monkeypatch):
         f"reason={result.reason!r} stderr={result.stderr!r}"
     )
     calls = stub_gh.calls()
-    assert len(calls) == 3, f"expected resolve + GET + POST, saw {calls}"
-    resolve_args, get_args, post_args = calls
+    assert len(calls) == 4, (
+        f"expected resolve + identity + GET + POST, saw {calls}"
+    )
+    resolve_args, _id_args, get_args, post_args = calls
     assert "/repos/jsboige/CoursIA/commits/38287ac491cc" in resolve_args
     # GET dedup jq matches on the FULL OID — a short sha would never match.
     # (The jq program embeds the OID inside its select() — substring check.)
@@ -667,6 +689,15 @@ def test_post_review_propagates_head_lookup_failure(monkeypatch):
 def _no_attribution_key_by_default(tmp_path, monkeypatch):
     absent = tmp_path / "absent-attribution.key"
     monkeypatch.setenv("HERMES_ATTRIBUTION_KEY", str(absent).replace("\\", "/"))
+
+
+# Account-identity guard: every shell-exercising test needs an expected
+# login (the guard fails closed without one). jsboige is also the stub's
+# default reported login, so the identity check passes by default; the
+# refusal tests below override either side.
+@pytest.fixture(autouse=True)
+def _expected_login_by_default(monkeypatch):
+    monkeypatch.setenv("HERMES_EXPECTED_LOGIN", "jsboige")
 
 
 @pytest.fixture()
@@ -833,3 +864,84 @@ def test_cli_verify_marker_exit_codes(attribution_key, monkeypatch, capsys):
     tampered = re.sub(r"sig=([0-9a-f]{8})", _flip, good)
     code, v = _run(tampered, "--pr", "42", "--sha", "a" * 40)
     assert code == 2 and v["signature_valid"] is False
+
+
+# --- Account-identity guard (#3476 datapoint #24, bot rule #3032) ----------
+
+
+@pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
+def test_real_snippet_refuses_when_login_mismatches(stub_gh, monkeypatch):
+    """A stray `gh auth switch` flips the active login: the POST must be
+    refused with the observed login surfaced, and NOTHING sent — not even
+    the GET-reviews probe (identity is checked first)."""
+    monkeypatch.setenv("GH_STUB_LOGIN", "someone-else")
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863,
+        "38287ac491cc8b9edcd792a6b4856e6e377dcba4",
+        "verdict",
+        lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is False
+    assert result.reason == "refused_account"
+    assert result.observed_login == "someone-else"
+    # Exactly one gh call — the identity probe. No GET, no POST.
+    calls = stub_gh.calls()
+    assert len(calls) == 1, f"identity probe only expected, saw {calls}"
+    assert not any("-X" in c and "POST" in c for c in calls)
+    # No payload was ever written by a POST.
+    assert not stub_gh.payload_copy.exists()
+
+
+def test_no_expected_login_fails_closed_before_any_traffic(
+    stub_gh, monkeypatch
+):
+    """HERMES_EXPECTED_LOGIN unset + expected_login not passed → refuse
+    BEFORE any subprocess: zero gh calls, distinct stderr. A wiring without
+    the env cannot post silently."""
+    monkeypatch.delenv("HERMES_EXPECTED_LOGIN", raising=False)
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863,
+        "38287ac491cc8b9edcd792a6b4856e6e377dcba4",
+        "verdict",
+        lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is False
+    assert result.reason == "refused_account"
+    assert result.observed_login is None
+    assert "HERMES_EXPECTED_LOGIN" in result.stderr
+    # Fail-closed is pre-shell: not even the identity probe ran.
+    assert stub_gh.calls() == []
+
+
+def test_expected_login_param_overrides_env(stub_gh, monkeypatch):
+    """The explicit parameter wins over the env — callers holding their own
+    expectation (e.g. a sweep replaying a historical lane) keep it."""
+    monkeypatch.setenv("GH_STUB_LOGIN", "historical-account")
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863,
+        "38287ac491cc8b9edcd792a6b4856e6e377dcba4",
+        "verdict",
+        lane="L", host="H", cycle=":01 01/01",
+        expected_login="historical-account",
+    )
+    assert result.posted is True, (
+        f"reason={result.reason!r} stderr={result.stderr!r}"
+    )
+
+
+@pytest.mark.skipif(not _HAS_SH, reason="sh not on PATH")
+def test_api_user_failure_refuses_instead_of_posting(stub_gh, monkeypatch):
+    """`gh api user` failing (auth expiry, network) exits non-zero under
+    set -eu: the shell dies, reason=error — an unverifiable identity is
+    never posted under."""
+    monkeypatch.setenv("GH_STUB_LOGIN_FAIL", "1")
+    result = guard.post_review_if_unique(
+        "jsboige", "CoursIA", 14863,
+        "38287ac491cc8b9edcd792a6b4856e6e377dcba4",
+        "verdict",
+        lane="L", host="H", cycle=":01 01/01",
+    )
+    assert result.posted is False
+    assert result.reason == "error"
+    calls = stub_gh.calls()
+    assert not any("-X" in c and "POST" in c for c in calls)

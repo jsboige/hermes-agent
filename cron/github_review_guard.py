@@ -16,14 +16,31 @@ po-2026 container's cron setup, outside this repository, so wiring them is
 follow-up work tracked in ``jsboige/roo-extensions#3476``. Until that wiring
 lands, 0 % of container POSTs go through this guard.
 
-What the single ``sh -c`` subprocess does and does not buy: the GET
+What the single ``sh -c`` subprocess does and does not buy: the identity
+check (``gh api user``), the GET
 (``/repos/{owner}/{repo}/pulls/{pr}/reviews``) and the conditional POST run
 inside one shell invocation, which removes the Python-side gap between the
-check and the send. It is **not** an atomicity guarantee: the GET and the
-POST are two ``gh`` processes inside that shell, and the kernel may schedule
-another lane's guard between them. Cross-lane serialization must come from
-the caller holding the canonical Hermes cron lock
+check and the send. It is **not** an atomicity guarantee: the checks and the
+POST are separate ``gh`` processes inside that shell, and the kernel may
+schedule another lane's guard between them. Cross-lane serialization must
+come from the caller holding the canonical Hermes cron lock
 (``~/.hermes/cron/.tick.lock``) around this call at wiring time.
+
+Account-identity guard (roo-extensions #3476, web1 datapoint #24): the
+previous guards cover the *what* (no twin same-SHA review) and the *who*
+(signed attribution marker), but neither looked at the login the POST
+actually leaves under — on a shared-login container a stray ``gh auth
+switch`` re-silences every attribution. This is the bot equivalent of the
+roo-extensions rule #3032: ``gh api user --jq .login`` runs **in the same
+shell as the POST**, compared against the expected login
+(:func:`_expected_login` — ``HERMES_EXPECTED_LOGIN`` env, set by the
+container-side lane wrapper). Mismatch → the POST is refused
+(``reason="refused_account"``, the observed login in
+``PostResult.observed_login``, an ``logger.error`` alert) and nothing is
+sent. **Fail-closed**: no expected login configured → refuse, never
+silently post; ``gh api user`` failing → the shell exits non-zero →
+``reason="error"``, still no POST. An emission under an unexpected account
+can no longer be silent.
 
 Cycle/lane attribution: by default the guard appends a single line to the
 review body before POSTing::
@@ -116,6 +133,17 @@ _DEFAULT_HOST = ""  # populated at call time from socket.gethostname()
 
 def _lane() -> str:
     return os.environ.get("HERMES_LANE", _DEFAULT_LANE).strip() or _DEFAULT_LANE
+
+
+def _expected_login() -> Optional[str]:
+    """The GitHub login this lane is configured to post under.
+
+    ``HERMES_EXPECTED_LOGIN`` is set by the container-side lane wrapper at
+    wiring time (like ``HERMES_LANE``). An empty/unset value means "no
+    expectation configured" — the caller fails closed on that (see
+    :func:`post_review_if_unique`).
+    """
+    return os.environ.get("HERMES_EXPECTED_LOGIN", "").strip() or None
 
 
 def _hostname() -> str:
@@ -295,6 +323,10 @@ class PostResult:
     reason:
         ``"posted"`` — review is live on GitHub.
         ``"skipped_duplicate"`` — same-SHA review already exists; nothing sent.
+        ``"refused_account"`` — the active ``gh`` login is not the expected
+          one (``observed_login`` holds it), or no expected login is
+          configured; nothing sent. This is the alert signal: an emission
+          under an unexpected account was refused instead of staying silent.
         ``"error"`` — subprocess returned non-zero or shell snippet failed
           before the POST could complete; ``stderr`` carries the diagnostic.
     commit_id:
@@ -303,6 +335,10 @@ class PostResult:
         #18 §3), so this echoes the resolution result, not the raw input.
     review_id:
         GitHub review ID returned by the POST, or ``None`` if not posted.
+    observed_login:
+        The login ``gh api user`` reported at guard time, for
+        ``refused_account`` results (``None`` when the refusal predates the
+        shell — no expected login configured).
     body_with_marker:
         The body that was actually sent (with the attribution marker
         appended). Useful for logs and dashboard receipts.
@@ -319,6 +355,7 @@ class PostResult:
     body_with_marker: str
     elapsed_s: float
     review_id: Optional[int] = None
+    observed_login: Optional[str] = None
     stdout: str = ""
     stderr: str = ""
 
@@ -382,6 +419,7 @@ def post_review_if_unique(
     lane: Optional[str] = None,
     host: Optional[str] = None,
     cycle: Optional[str] = None,
+    expected_login: Optional[str] = None,
     timeout_s: float = 60.0,
 ) -> PostResult:
     """Guarded POST: GET reviews, skip if a same-SHA review exists, else POST.
@@ -424,6 +462,12 @@ def post_review_if_unique(
         Override the attribution marker values. Defaults are read from
         ``HERMES_LANE`` / ``HERMES_HOSTNAME`` env / :func:`_hostname` /
         :func:`_cycle_label`.
+    expected_login:
+        The GitHub login this POST must leave under. Defaults to
+        ``HERMES_EXPECTED_LOGIN`` env; when neither is set the guard
+        **refuses** (``reason="refused_account"``, fail-closed) — see the
+        account-identity guard in the module docstring. The comparison runs
+        inside the guarded shell, against the login live at POST time.
     timeout_s:
         Subprocess timeout. ``60s`` covers a slow GitHub response on a
         saturated link; ``POST``-only paths should normally complete in
@@ -454,6 +498,34 @@ def post_review_if_unique(
         )
 
     gh = _require_gh()
+
+    # Account-identity guard (#3476 datapoint #24): fail closed BEFORE any
+    # GitHub traffic when no expectation is configured — the container-side
+    # wrapper must set HERMES_EXPECTED_LOGIN at wiring time, and a wiring
+    # without it refuses loudly rather than posting under an unverified
+    # account. The login-vs-expected COMPARISON itself lives in the shell
+    # below (same invocation as the POST — rule #3032: no check-to-send gap).
+    eff_expected = expected_login or _expected_login()
+    if not eff_expected:
+        logger.error(
+            "github_review_guard: HERMES_EXPECTED_LOGIN unset for lane %s "
+            "on host %s — refusing to POST (fail-closed; the lane wrapper "
+            "must set it at wiring time)",
+            lane or _lane(), host or _hostname(),
+        )
+        return PostResult(
+            posted=False,
+            reason="refused_account",
+            commit_id=(commit_sha or "").strip().lower(),
+            body_with_marker=append_attribution_marker(
+                body, lane=lane, host=host, cycle=cycle, pr=pr_number,
+            ),
+            elapsed_s=0.0,
+            stderr=(
+                "refused: no expected login configured "
+                "(HERMES_EXPECTED_LOGIN unset, expected_login not passed)"
+            ),
+        )
 
     # Datapoint #18 §3 (roo-extensions #3476): review ``commit_id`` values on
     # GitHub are ALWAYS full 40-char OIDs and the POST endpoint requires one —
@@ -510,6 +582,19 @@ set -eu
 PAYLOAD="$1"
 SHA="$2"
 GH="$3"
+EXPECTED="$4"
+
+# Account-identity guard (#3476 datapoint #24, bot equivalent of rule #3032):
+# the login the POST would leave under is checked IN THIS SHELL, immediately
+# before the send — no Python-side gap where a stray `gh auth switch` could
+# flip the account between check and POST. Mismatch -> refuse (nothing is
+# sent); `gh api user` failing exits non-zero under set -eu -> same refusal,
+# an identity we could not verify is not an identity we post under.
+LOGIN="$("$GH" api user --jq .login)"
+if [ "$LOGIN" != "$EXPECTED" ]; then
+    echo "REFUSED_LOGIN:$LOGIN"
+    exit 0
+fi
 
 # GET reviews, count entries whose commit_id matches $SHA.
 # --paginate pulls all pages; gh >= 2.100 rejects --slurp with --jq, so each
@@ -545,10 +630,11 @@ fi
         payload_file.write(payload)
         payload_path = payload_file.name
 
-    # One sh -c invocation: the check and the POST share the shell (the
-    # resolved gh path is passed as $3 so the binary verified by
-    # _require_gh() is the one actually invoked; $2 carries the FULL SHA).
-    cmd = ["sh", "-c", shell_script, "_", payload_path, sha, gh]
+    # One sh -c invocation: the identity check, the GET and the POST share
+    # the shell (the resolved gh path is passed as $3 so the binary verified
+    # by _require_gh() is the one actually invoked; $2 carries the FULL SHA,
+    # $4 the expected login).
+    cmd = ["sh", "-c", shell_script, "_", payload_path, sha, gh, eff_expected]
     t0 = time.monotonic()
     try:
         completed = subprocess.run(
@@ -606,6 +692,29 @@ fi
             commit_id=sha,
             body_with_marker=body_with_marker,
             elapsed_s=elapsed,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    # REFUSED_LOGIN path — print format "REFUSED_LOGIN:<login>" (identity
+    # guard): the alert is the logger.error — container log watchers and the
+    # cron lane's dashboard receipt surface it; the distinct reason lets
+    # callers escalate without string-matching stderr.
+    if stdout.startswith("REFUSED_LOGIN:"):
+        observed = stdout[len("REFUSED_LOGIN:"):].strip()
+        logger.error(
+            "github_review_guard: REFUSED POST for %s/%s#%d — active gh "
+            "login %r != expected %r (lane %s, host %s)",
+            owner, repo, pr_number, observed, eff_expected,
+            lane or _lane(), host or _hostname(),
+        )
+        return PostResult(
+            posted=False,
+            reason="refused_account",
+            commit_id=sha,
+            body_with_marker=body_with_marker,
+            elapsed_s=elapsed,
+            observed_login=observed,
             stdout=stdout,
             stderr=stderr,
         )
