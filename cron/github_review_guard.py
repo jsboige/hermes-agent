@@ -16,14 +16,31 @@ po-2026 container's cron setup, outside this repository, so wiring them is
 follow-up work tracked in ``jsboige/roo-extensions#3476``. Until that wiring
 lands, 0 % of container POSTs go through this guard.
 
-What the single ``sh -c`` subprocess does and does not buy: the GET
+What the single ``sh -c`` subprocess does and does not buy: the identity
+check (``gh api user``), the GET
 (``/repos/{owner}/{repo}/pulls/{pr}/reviews``) and the conditional POST run
 inside one shell invocation, which removes the Python-side gap between the
-check and the send. It is **not** an atomicity guarantee: the GET and the
-POST are two ``gh`` processes inside that shell, and the kernel may schedule
-another lane's guard between them. Cross-lane serialization must come from
-the caller holding the canonical Hermes cron lock
+check and the send. It is **not** an atomicity guarantee: the checks and the
+POST are separate ``gh`` processes inside that shell, and the kernel may
+schedule another lane's guard between them. Cross-lane serialization must
+come from the caller holding the canonical Hermes cron lock
 (``~/.hermes/cron/.tick.lock``) around this call at wiring time.
+
+Account-identity guard (roo-extensions #3476, web1 datapoint #24): the
+previous guards cover the *what* (no twin same-SHA review) and the *who*
+(signed attribution marker), but neither looked at the login the POST
+actually leaves under — on a shared-login container a stray ``gh auth
+switch`` re-silences every attribution. This is the bot equivalent of the
+roo-extensions rule #3032: ``gh api user --jq .login`` runs **in the same
+shell as the POST**, compared against the expected login
+(:func:`_expected_login` — ``HERMES_EXPECTED_LOGIN`` env, set by the
+container-side lane wrapper). Mismatch → the POST is refused
+(``reason="refused_account"``, the observed login in
+``PostResult.observed_login``, an ``logger.error`` alert) and nothing is
+sent. **Fail-closed**: no expected login configured → refuse, never
+silently post; ``gh api user`` failing → the shell exits non-zero →
+``reason="error"``, still no POST. An emission under an unexpected account
+can no longer be silent.
 
 Cycle/lane attribution: by default the guard appends a single line to the
 review body before POSTing::
@@ -46,6 +63,13 @@ review body before POSTing::
   marker is appended. A partial marker (missing lane/cycle/host) or a
   quoted ``[Hermes …]`` line mid-body does **not** count — the marker is
   detected only at the very end of the body.
+- **Signed markers** (roo-extensions #3476 follow-up): when the container
+  holds an attribution key file, the line gains a trailing
+  ``sig=<8 hex>`` — HMAC-SHA256 over ``lane|cycle|host|pr|sha``, with the
+  PR number and full commit OID as MAC-only inputs (never displayed), so a
+  copied marker fails verification on any other PR/commit. No key means an
+  unsigned marker, identical to the pre-signing format; signing never
+  blocks a POST.
 
 Module surface:
 
@@ -56,6 +80,9 @@ Module surface:
 - :func:`append_attribution_marker` — pure helper that adds the marker line
   to a body if not already present; exported so callers can preview the body
   before POSTing.
+- :func:`verify_attribution` — extract + verify a body's marker against a
+  PR/SHA pair; the CLI (``--verify-marker``, body on stdin) wraps it for
+  fleet sweeps.
 
 All subprocess invocations use ``sh -c`` with a temporary file holding the
 POST payload so the command line does not embed secrets or large bodies
@@ -65,6 +92,8 @@ POST payload so the command line does not embed secrets or large bodies
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -84,10 +113,15 @@ logger = logging.getLogger(__name__)
 # ``[Hermes]``, a partial marker, or a quoted ``[Hermes …]`` line in the
 # middle of the body never suppresses the fresh marker (issue #3476 review:
 # the previous permissive regex accepted citations and templates).
+# The trailing ``sig=<8 hex>`` field is OPTIONAL (signed markers, #3476
+# follow-up): unsigned markers keep matching, so idempotence and every
+# pre-signing body stay valid. ``host`` stops at ``,`` so it cannot swallow
+# the sig field — real hostnames / container IDs contain no comma.
 _ATTRIBUTION_LINE_RE = re.compile(
     r"\[Hermes\s+(?P<lane>[^\],]+),"
     r"\s*cycle\s+:(?P<cycle>\d{1,2})\s+(?P<day>\d{1,2}/\d{1,2}),"
-    r"\s*host\s+(?P<host>[^\]]+)\]\s*$"
+    r"\s*host\s+(?P<host>[^\],]+)"
+    r"(?:,\s*sig=(?P<sig>[0-9a-f]{8}))?\]\s*$"
 )
 
 # Default lane when the caller passes none and HERMES_LANE is unset. No code
@@ -99,6 +133,17 @@ _DEFAULT_HOST = ""  # populated at call time from socket.gethostname()
 
 def _lane() -> str:
     return os.environ.get("HERMES_LANE", _DEFAULT_LANE).strip() or _DEFAULT_LANE
+
+
+def _expected_login() -> Optional[str]:
+    """The GitHub login this lane is configured to post under.
+
+    ``HERMES_EXPECTED_LOGIN`` is set by the container-side lane wrapper at
+    wiring time (like ``HERMES_LANE``). An empty/unset value means "no
+    expectation configured" — the caller fails closed on that (see
+    :func:`post_review_if_unique`).
+    """
+    return os.environ.get("HERMES_EXPECTED_LOGIN", "").strip() or None
 
 
 def _hostname() -> str:
@@ -127,24 +172,144 @@ def _cycle_label(now=None) -> str:
 
 def append_attribution_marker(body: str, *, lane: Optional[str] = None,
                               host: Optional[str] = None,
-                              cycle: Optional[str] = None) -> str:
+                              cycle: Optional[str] = None,
+                              pr: Optional[int] = None,
+                              sha: Optional[str] = None) -> str:
     """Return ``body`` with a single attribution marker appended.
 
     Idempotent: if the body already **ends** with a full
     ``[Hermes <lane>, cycle :XX DD/MM, host <host>]`` line (matching
     :data:`_ATTRIBUTION_LINE_RE`), the marker is not duplicated. Partial or
-    mid-body markers do not count.
+    mid-body markers do not count. An unsigned trailing marker is left
+    as-is (never upgraded in place).
+
+    When an attribution key is loadable (see :func:`_load_attribution_key`),
+    the marker carries a trailing ``sig=<8 hex>``: HMAC-SHA256 over
+    ``lane|cycle|host|pr|sha`` truncated to 8 hex chars. Including ``pr`` and
+    the 40-char ``sha`` in the MAC input (but NOT in the displayed line)
+    makes a captured marker non-replayable onto another PR or commit. Safe
+    degradation: no key, or an unusable one, means an unsigned marker —
+    signing never blocks a POST. ``pr``/``sha`` default to ``None`` and are
+    MAC'd as empty fields in that case.
     """
     if not body:
         body = ""
     body = body.rstrip()
     if _ATTRIBUTION_LINE_RE.search(body):
         return body + "\n"
-    line = (
-        f"[Hermes {lane or _lane()}, cycle {cycle or _cycle_label()}, "
-        f"host {host or _hostname()}]"
-    )
+    eff_lane = lane or _lane()
+    eff_cycle = cycle or _cycle_label()
+    eff_host = host or _hostname()
+    line = f"[Hermes {eff_lane}, cycle {eff_cycle}, host {eff_host}"
+    key = _load_attribution_key()
+    if key is not None:
+        line += f", sig={_sign_marker(key, eff_lane, eff_cycle, eff_host, pr, sha)}"
+    line += "]"
     return body + "\n\n" + line + "\n"
+
+
+# Signed-marker key (roo-extensions #3476 follow-up): the marker line alone
+# is forgeable text — anyone can write ``[Hermes hermes-pr-review, cycle …]``
+# into a body. A short HMAC over the marker fields turns the line into an
+# attestation only key holders can produce. The key is NEVER generated here:
+# deployment creates it (32 random bytes, mode 0600) inside the container;
+# this module only reads it, and degrades to unsigned markers without it.
+_DEFAULT_KEY_PATH = "/opt/data/hermes-ops/guard/attribution.key"
+
+
+def _attribution_key_path() -> str:
+    """Key file location — ``HERMES_ATTRIBUTION_KEY`` (a PATH, never key
+    material: env values are readable from ``/proc/<pid>/environ``) wins
+    over the container default."""
+    env_path = os.environ.get("HERMES_ATTRIBUTION_KEY", "").strip()
+    return env_path or _DEFAULT_KEY_PATH
+
+
+def _load_attribution_key() -> Optional[bytes]:
+    """Return the HMAC key bytes, or ``None`` when unavailable.
+
+    ``None`` (missing file, unreadable, or shorter than 16 bytes) always
+    means "emit an unsigned marker" — never an exception, never a blocked
+    POST.
+    """
+    path = _attribution_key_path()
+    try:
+        # Key material is arbitrary bytes (hex at deploy time) — binary mode
+        # by design; the path is hoisted so the windows-footguns checker's
+        # open() regex can see the "rb" mode (a call expression as the first
+        # argument blinds its mode group).
+        with open(path, "rb") as fh:
+            key = fh.read().strip()
+    except OSError:
+        return None
+    if len(key) < 16:
+        return None
+    return key
+
+
+def _sign_marker(key: bytes, lane: str, cycle: str, host: str,
+                 pr: Optional[int], sha: Optional[str]) -> str:
+    """8-hex HMAC-SHA256 over ``lane|cycle|host|pr|sha`` (empty for None)."""
+    msg = "|".join([
+        lane,
+        cycle,
+        host,
+        "" if pr is None else str(pr),
+        "" if not sha else sha.strip().lower(),
+    ])
+    return hmac.new(key, msg.encode("utf-8"), hashlib.sha256).hexdigest()[:8]
+
+
+@dataclass(slots=True)
+class AttributionVerdict:
+    """Result of :func:`verify_attribution` — JSON-serializable for sweeps.
+
+    ``signature_valid`` requires ``key_available``; a verdict with
+    ``signed=True, key_available=False`` means "cannot verify here" (e.g.
+    sweeping from a host without the container key), NOT "forged".
+    """
+
+    marker_present: bool
+    lane: Optional[str] = None
+    cycle: Optional[str] = None
+    host: Optional[str] = None
+    signed: bool = False
+    key_available: bool = False
+    signature_valid: bool = False
+
+
+def verify_attribution(body: str, *, pr: Optional[int] = None,
+                       sha: Optional[str] = None) -> AttributionVerdict:
+    """Extract and verify the attribution marker at the end of ``body``.
+
+    ``pr``/``sha`` are the review's PR number and full commit OID as known
+    by the CALLER (from the GitHub API object being swept) — they are MAC
+    inputs, not read back from the line. A marker whose sig was computed
+    for a different PR/commit therefore fails verification even though its
+    text looks well-formed: the anti-replay property.
+    """
+    if not body:
+        return AttributionVerdict(marker_present=False)
+    m = _ATTRIBUTION_LINE_RE.search(body.rstrip())
+    if not m:
+        return AttributionVerdict(marker_present=False)
+    cycle_label = f":{m['cycle']} {m['day']}"
+    verdict = AttributionVerdict(
+        marker_present=True,
+        lane=m["lane"],
+        cycle=cycle_label,
+        host=m["host"],
+        signed=m["sig"] is not None,
+    )
+    if not verdict.signed:
+        return verdict
+    key = _load_attribution_key()
+    if key is None:
+        return verdict  # key_available=False: unverifiable, not invalid
+    verdict.key_available = True
+    expected = _sign_marker(key, m["lane"], cycle_label, m["host"], pr, sha)
+    verdict.signature_valid = hmac.compare_digest(expected, m["sig"])
+    return verdict
 
 
 @dataclass(slots=True)
@@ -158,6 +323,10 @@ class PostResult:
     reason:
         ``"posted"`` — review is live on GitHub.
         ``"skipped_duplicate"`` — same-SHA review already exists; nothing sent.
+        ``"refused_account"`` — the active ``gh`` login is not the expected
+          one (``observed_login`` holds it), or no expected login is
+          configured; nothing sent. This is the alert signal: an emission
+          under an unexpected account was refused instead of staying silent.
         ``"error"`` — subprocess returned non-zero or shell snippet failed
           before the POST could complete; ``stderr`` carries the diagnostic.
     commit_id:
@@ -166,6 +335,10 @@ class PostResult:
         #18 §3), so this echoes the resolution result, not the raw input.
     review_id:
         GitHub review ID returned by the POST, or ``None`` if not posted.
+    observed_login:
+        The login ``gh api user`` reported at guard time, for
+        ``refused_account`` results (``None`` when the refusal predates the
+        shell — no expected login configured).
     body_with_marker:
         The body that was actually sent (with the attribution marker
         appended). Useful for logs and dashboard receipts.
@@ -182,6 +355,7 @@ class PostResult:
     body_with_marker: str
     elapsed_s: float
     review_id: Optional[int] = None
+    observed_login: Optional[str] = None
     stdout: str = ""
     stderr: str = ""
 
@@ -245,6 +419,7 @@ def post_review_if_unique(
     lane: Optional[str] = None,
     host: Optional[str] = None,
     cycle: Optional[str] = None,
+    expected_login: Optional[str] = None,
     timeout_s: float = 60.0,
 ) -> PostResult:
     """Guarded POST: GET reviews, skip if a same-SHA review exists, else POST.
@@ -287,6 +462,12 @@ def post_review_if_unique(
         Override the attribution marker values. Defaults are read from
         ``HERMES_LANE`` / ``HERMES_HOSTNAME`` env / :func:`_hostname` /
         :func:`_cycle_label`.
+    expected_login:
+        The GitHub login this POST must leave under. Defaults to
+        ``HERMES_EXPECTED_LOGIN`` env; when neither is set the guard
+        **refuses** (``reason="refused_account"``, fail-closed) — see the
+        account-identity guard in the module docstring. The comparison runs
+        inside the guarded shell, against the login live at POST time.
     timeout_s:
         Subprocess timeout. ``60s`` covers a slow GitHub response on a
         saturated link; ``POST``-only paths should normally complete in
@@ -317,9 +498,34 @@ def post_review_if_unique(
         )
 
     gh = _require_gh()
-    body_with_marker = append_attribution_marker(
-        body, lane=lane, host=host, cycle=cycle,
-    )
+
+    # Account-identity guard (#3476 datapoint #24): fail closed BEFORE any
+    # GitHub traffic when no expectation is configured — the container-side
+    # wrapper must set HERMES_EXPECTED_LOGIN at wiring time, and a wiring
+    # without it refuses loudly rather than posting under an unverified
+    # account. The login-vs-expected COMPARISON itself lives in the shell
+    # below (same invocation as the POST — rule #3032: no check-to-send gap).
+    eff_expected = expected_login or _expected_login()
+    if not eff_expected:
+        logger.error(
+            "github_review_guard: HERMES_EXPECTED_LOGIN unset for lane %s "
+            "on host %s — refusing to POST (fail-closed; the lane wrapper "
+            "must set it at wiring time)",
+            lane or _lane(), host or _hostname(),
+        )
+        return PostResult(
+            posted=False,
+            reason="refused_account",
+            commit_id=(commit_sha or "").strip().lower(),
+            body_with_marker=append_attribution_marker(
+                body, lane=lane, host=host, cycle=cycle, pr=pr_number,
+            ),
+            elapsed_s=0.0,
+            stderr=(
+                "refused: no expected login configured "
+                "(HERMES_EXPECTED_LOGIN unset, expected_login not passed)"
+            ),
+        )
 
     # Datapoint #18 §3 (roo-extensions #3476): review ``commit_id`` values on
     # GitHub are ALWAYS full 40-char OIDs and the POST endpoint requires one —
@@ -344,7 +550,9 @@ def post_review_if_unique(
                 posted=False,
                 reason="error",
                 commit_id=sha,
-                body_with_marker=body_with_marker,
+                body_with_marker=append_attribution_marker(
+                    body, lane=lane, host=host, cycle=cycle, pr=pr_number,
+                ),
                 elapsed_s=0.0,
                 stderr=(
                     f"commit_sha {sha!r} is not 40 chars and could not be "
@@ -352,6 +560,14 @@ def post_review_if_unique(
                 ),
             )
         sha = resolved
+
+    # Marker composition happens AFTER short-SHA resolution so the HMAC (if
+    # any) covers the full 40-char OID actually POSTed and matched by the
+    # dedup — a sig over a truncated SHA would never verify on sweep.
+    body_with_marker = append_attribution_marker(
+        body, lane=lane, host=host, cycle=cycle,
+        pr=pr_number, sha=sha,
+    )
 
     # Write the payload to a tempfile; gh api --input <file> avoids leaking
     # the body through /proc/<pid>/cmdline.
@@ -366,6 +582,19 @@ set -eu
 PAYLOAD="$1"
 SHA="$2"
 GH="$3"
+EXPECTED="$4"
+
+# Account-identity guard (#3476 datapoint #24, bot equivalent of rule #3032):
+# the login the POST would leave under is checked IN THIS SHELL, immediately
+# before the send — no Python-side gap where a stray `gh auth switch` could
+# flip the account between check and POST. Mismatch -> refuse (nothing is
+# sent); `gh api user` failing exits non-zero under set -eu -> same refusal,
+# an identity we could not verify is not an identity we post under.
+LOGIN="$("$GH" api user --jq .login)"
+if [ "$LOGIN" != "$EXPECTED" ]; then
+    echo "REFUSED_LOGIN:$LOGIN"
+    exit 0
+fi
 
 # GET reviews, count entries whose commit_id matches $SHA.
 # --paginate pulls all pages; gh >= 2.100 rejects --slurp with --jq, so each
@@ -401,10 +630,11 @@ fi
         payload_file.write(payload)
         payload_path = payload_file.name
 
-    # One sh -c invocation: the check and the POST share the shell (the
-    # resolved gh path is passed as $3 so the binary verified by
-    # _require_gh() is the one actually invoked; $2 carries the FULL SHA).
-    cmd = ["sh", "-c", shell_script, "_", payload_path, sha, gh]
+    # One sh -c invocation: the identity check, the GET and the POST share
+    # the shell (the resolved gh path is passed as $3 so the binary verified
+    # by _require_gh() is the one actually invoked; $2 carries the FULL SHA,
+    # $4 the expected login).
+    cmd = ["sh", "-c", shell_script, "_", payload_path, sha, gh, eff_expected]
     t0 = time.monotonic()
     try:
         completed = subprocess.run(
@@ -462,6 +692,29 @@ fi
             commit_id=sha,
             body_with_marker=body_with_marker,
             elapsed_s=elapsed,
+            stdout=stdout,
+            stderr=stderr,
+        )
+
+    # REFUSED_LOGIN path — print format "REFUSED_LOGIN:<login>" (identity
+    # guard): the alert is the logger.error — container log watchers and the
+    # cron lane's dashboard receipt surface it; the distinct reason lets
+    # callers escalate without string-matching stderr.
+    if stdout.startswith("REFUSED_LOGIN:"):
+        observed = stdout[len("REFUSED_LOGIN:"):].strip()
+        logger.error(
+            "github_review_guard: REFUSED POST for %s/%s#%d — active gh "
+            "login %r != expected %r (lane %s, host %s)",
+            owner, repo, pr_number, observed, eff_expected,
+            lane or _lane(), host or _hostname(),
+        )
+        return PostResult(
+            posted=False,
+            reason="refused_account",
+            commit_id=sha,
+            body_with_marker=body_with_marker,
+            elapsed_s=elapsed,
+            observed_login=observed,
             stdout=stdout,
             stderr=stderr,
         )
@@ -529,7 +782,7 @@ def post_review(
             reason="error",
             commit_id="",
             body_with_marker=append_attribution_marker(
-                body, lane=lane, host=host, cycle=cycle,
+                body, lane=lane, host=host, cycle=cycle, pr=pr_number,
             ),
             elapsed_s=0.0,
             stderr=f"gh pr view failed: {head_proc.stderr.strip()[:200]}",
@@ -541,7 +794,7 @@ def post_review(
             reason="error",
             commit_id="",
             body_with_marker=append_attribution_marker(
-                body, lane=lane, host=host, cycle=cycle,
+                body, lane=lane, host=host, cycle=cycle, pr=pr_number,
             ),
             elapsed_s=0.0,
             stderr="gh pr view returned empty headRefOid",
@@ -550,3 +803,41 @@ def post_review(
         owner, repo, pr_number, sha, body, event,
         lane=lane, host=host, cycle=cycle, timeout_s=timeout_s,
     )
+
+
+def _cli_verify_marker(argv: Optional[list] = None) -> int:
+    """``--verify-marker``: read a review body on stdin, verify its marker.
+
+    Exit codes a sweep can branch on: 0 signed+valid · 1 marker present but
+    unsigned (pre-signing emission) · 2 signed but invalid OR unverifiable
+    (no key on this host) · 3 no marker at all. One JSON verdict on stdout.
+    """
+    import argparse
+    import sys
+
+    parser = argparse.ArgumentParser(
+        prog="github_review_guard.py --verify-marker",
+        description="Verify the attribution marker of a review body (stdin).",
+    )
+    parser.add_argument("--pr", type=int, default=None,
+                        help="PR number the review was posted on")
+    parser.add_argument("--sha", default=None,
+                        help="full 40-char commit OID of the review")
+    args = parser.parse_args(argv)
+
+    body = sys.stdin.read()
+    verdict = verify_attribution(body, pr=args.pr, sha=args.sha)
+    import dataclasses
+
+    print(json.dumps(dataclasses.asdict(verdict)))
+    if not verdict.marker_present:
+        return 3
+    if not verdict.signed:
+        return 1
+    if verdict.signature_valid:
+        return 0
+    return 2
+
+
+if __name__ == "__main__":  # pragma: no cover - CLI exercised via _cli_verify_marker
+    raise SystemExit(_cli_verify_marker())
