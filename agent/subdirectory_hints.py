@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, Set
 
 from agent.prompt_builder import _read_text_with_timeout, _scan_context_content, _truncate_content
 from agent.search_policy import SEARCH_PRUNE_DIR_NAMES
+from hermes_constants import get_hermes_home
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,31 @@ def _first_hint_file(directory: Path):
     return None
 
 
+def _resolve_working_dir(working_dir: Optional[str]) -> Path:
+    """Anchor directory for the tracker, surviving a deleted process cwd.
+
+    A long-running gateway can end up with its process cwd pointing at a
+    since-deleted scratch dir (cron review workdirs under a tmp prefix); every
+    ``os.getcwd()`` there raises ``FileNotFoundError`` and used to kill each
+    cron job at construction time. Windows adds a twist: ``Path.resolve()``
+    itself consults ``os.getcwd()`` (ntpath.realpath), so even explicit
+    working dirs need the guard. Fall back to the persistent Hermes home when
+    no cwd can be had at all — always a valid directory, never a scratch tree.
+    """
+    if working_dir:
+        try:
+            return Path(working_dir).resolve()
+        except OSError:
+            logger.warning("cannot resolve working dir %s (process cwd gone)", working_dir)
+            return Path(working_dir).expanduser()
+    try:
+        return Path(os.getcwd()).resolve()
+    except OSError:
+        fallback = get_hermes_home()
+        logger.warning("process cwd is gone; anchoring subdirectory hints on %s", fallback)
+        return fallback
+
+
 class SubdirectoryHintTracker:
     """Track which directories the agent visits and load hints on first access.
 
@@ -60,7 +86,7 @@ class SubdirectoryHintTracker:
     """
 
     def __init__(self, working_dir: Optional[str] = None):
-        self.working_dir = Path(working_dir or os.getcwd()).resolve()
+        self.working_dir = _resolve_working_dir(working_dir)
         # The working dir is pre-marked loaded (startup context handles it).
         self._loaded_dirs: Set[Path] = {self.working_dir}
         # Content digests already injected: the same file reached through
