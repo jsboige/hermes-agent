@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "searxng": {
+      "command": "npx",
+      "args": ["-y", "mcp-searxng"],
+      "env": {
+        "SEARXNG_URL": "https://search.myia.io/"
+      },
+      "disabled": false
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "transportType": "stdio",
+      "disabled": true
+    },
+    "sk-agent": {
+      "command": "C:\\dev\\roo-extensions\\mcps\\internal\\servers\\sk-agent\\.venv\\Scripts\\python.exe",
+      "args": ["C:\\dev\\roo-extensions\\mcps\\internal\\servers\\sk-agent\\sk_agent.py"],
+      "disabled": true
+    }
+  }
+}

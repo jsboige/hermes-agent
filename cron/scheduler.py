@@ -2136,6 +2136,11 @@ class _CronRunScope:
         )
         for name in _CRON_DELIVERY_VARS:
             _VAR_MAP[name].set("")
+        # #3476: publish the lane name so the review-POST guard wiring can attribute
+        # and serialize every gh review POST from this job's agent
+        # (tools.environments.local bridges it into each child process env).
+        from cron.review_post_lane import set_current_lane
+        self._review_lane_token = set_current_lane(str(job.get("name") or job_id))
         # Workdir binds to the per-run task id (tool-layer cwd authority) instead of mutating
         # global TERMINAL_CWD; _SESSION_CWD above remains the prompt/context-file authority.
         self.task_id = f"cron:{job_id}:{execution_id or job.get('execution_id') or uuid.uuid4().hex}"
@@ -2165,6 +2170,8 @@ class _CronRunScope:
             self._cron_session_var.reset(self._cron_session_token)
         if self._non_dispatcher_token is not None:
             exit_non_dispatcher_owned_context(self._non_dispatcher_token)
+        from cron.review_post_lane import reset_current_lane
+        reset_current_lane(self._review_lane_token)
         for name in _CRON_DELIVERY_VARS:
             self._var_map[name].set("")
 

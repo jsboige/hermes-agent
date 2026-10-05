@@ -273,12 +273,26 @@ def _filter_secret_env(
             out[key] = value
 
 
+def _inject_cron_lane_env(env: dict) -> None:
+    """Bridge the cron lane ContextVar (#3476 review-POST guard wiring) into a
+    child env: ``HERMES_LANE``, ``HERMES_HOSTNAME`` and the guard shim dir first
+    on ``PATH``. No-op outside a cron job run, so interactive chats and CLI
+    spawns never see the shim. Failures are logged, never raised — the guard
+    wiring must not break the terminal spawn path."""
+    try:
+        from cron.review_post_lane import lane_child_env_injection
+        lane_child_env_injection(env)
+    except Exception:
+        logger.debug("cron lane env injection skipped", exc_info=True)
+
+
 def _finalize_child_env(env: dict) -> dict:
     """Guards shared by every spawn surface: profile-home propagation, session-context
     bridging, Hermes-owned PYTHONPATH + venv-marker strip, MSYS defaults, delegate_task
     Kanban scrub. Returns the (possibly new) dict."""
     _apply_profile_home(env)
     _inject_session_context_env(env)
+    _inject_cron_lane_env(env)
     _strip_hermes_owned_pythonpath_and_runtime_markers(env)
     _apply_windows_msys_bash_env_defaults(env)
     try:  # strip dispatcher-owned Kanban env from delegate_task child subprocesses

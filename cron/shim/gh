@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""Guarded ``gh`` shim (#3476) — review POSTs go through cron.github_review_guard.
+
+Installed FIRST on PATH for cron-lane child processes only (see
+``cron/review_post_lane.py``). Every non-review invocation execs the real gh
+untouched.
+"""
+import os
+import sys
+
+_HERE = os.path.dirname(os.path.realpath(__file__))
+_ROOT = os.path.dirname(os.path.dirname(_HERE))  # <repo>/cron/shim → <repo>
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from cron.review_post_lane import shim_exec  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(shim_exec(sys.argv[1:]))
