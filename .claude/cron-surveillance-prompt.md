@@ -26,7 +26,7 @@ Identifie : le dernier `[STATUS 12h]`, le dernier Tour `[CLUSTER-HEALTH] T#N` su
 1. **Container Hermes** :
    `docker ps --filter name=hermes --format "{{.Status}} | {{.Image}}"`
    `docker inspect hermes --format "{{.RestartCount}} restarts, started {{.State.StartedAt}}"`
-   Image attendue : `s6-sync-20260811`. Red flag : RestartCount > 3 ou Status pas "Up".
+   Image attendue : `s6-sync-20261006`. Red flag : RestartCount > 3 ou Status pas "Up".
 
 2. **Gateway PID vivant** :
    `docker exec hermes sh -c "pgrep -f 'gateway run' | head -1"`
