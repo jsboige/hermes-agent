@@ -131,6 +131,20 @@ if [ -n "$LINE" ]; then
     head -n $((LINE - 1)) "$DATA/config.yaml" > /tmp/config_appr.yaml
     mv /tmp/config_appr.yaml "$DATA/config.yaml"
 fi
+# Remove original memory: section (upstream 2026-10 sync ships a top-level
+# memory: key BEFORE auxiliary:, which the strip above does not reach) — we
+# replace it. Deletes every ^memory: block (key line + indented children +
+# blank padding), keeps comments and the next top-level key. A duplicate
+# memory: key is not a cosmetic YAML nitpick: the gateway survives it via
+# .env fallback, but the cron scheduler HARD-REFUSES every job ("Hermes
+# stopped ... formatting error") — full cron outage (incident 2026-10-07,
+# 5/5 jobs error, T#159 missed).
+echo "  -> Removing upstream memory: section(s)..."
+awk '
+    /^memory:/ { skip = 1; next }
+    skip && /^[^ \t]/ { skip = 0 }
+    !skip { print }
+' "$DATA/config.yaml" > /tmp/config_mem.yaml && mv /tmp/config_mem.yaml "$DATA/config.yaml"
 
 # Require secrets — NO hardcoded fallbacks
 STT_API_KEY="${WHISPER_BEARER_TOKEN:-}"
