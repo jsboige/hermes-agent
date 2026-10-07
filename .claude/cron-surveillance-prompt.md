@@ -100,13 +100,7 @@ Pour assurer la continuité tant que la session vit :
 
 1. `CronList` → note le/les job ID(s) de surveillance existant(s).
 2. `CronDelete` de CHACUN de ces jobs (y compris celui qui te fait fire maintenant).
-3. `CronCreate(cron: "17 */12 * * *", prompt: <WRAPPER VERBATIM ci-dessous>, recurring: true)`
+3. `CronCreate(cron: "17 */12 * * *", prompt: "/surveillance", recurring: true)` — le cron porte une **commande**, pas un prompt inline. La commande `/surveillance` (`.claude/commands/surveillance.md`) référence CETTE doc.
 4. Note le **nouveau job ID** dans le post `[STATUS 12h]`.
 
 Il doit toujours y avoir **exactement 1** job de surveillance (pas d'accumulation).
-
-### Wrapper à recopier verbatim dans le CronCreate
-
-```
-Cron surveillance Hermes 12h (opérateur Claude Code po-2026). Lis et exécute la routine dans : c:\dev\hermes-agent\.claude\cron-surveillance-prompt.md (recharge les dashboards, 8 vérifications dont check 8 lecture des messages des bots, post [STATUS 12h] sur workspace-hermes-agent, escalade seulement si container down / reviews >4h / NanoClaw >36h / global >36h / bus MCP down). FIN : self-re-arm obligatoire — CronList, CronDelete tous les jobs de surveillance, CronCreate('17 */12 * * *', <CE MÊME WRAPPER verbatim>, recurring:true), note le nouveau job ID dans le post.
-```

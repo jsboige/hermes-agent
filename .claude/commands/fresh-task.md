@@ -52,29 +52,35 @@ Use an **off-:00/:30 minute** to avoid the whole fleet hitting the API at the sa
 | `12h` | `17 */12 * * *` | mini-audit cadence |
 | `24h` | `23 9 * * *` | daily 09:23 |
 
-### 4. Build the cron prompt
+### 4. Write the task routine doc
 
-Assemble the task description + the Hermes coordination protocol:
+Le cron porte une **commande**, pas un prompt inline (convention flotte). Écris le doc de routine dans `c:\dev\hermes-agent\.claude\cron-tasks\<slug>.md` :
 
-```
+```markdown
+# Tâche récurrente : {task description}
+
+**Cadence :** {expr} — **Armed via :** /run-cron-task <slug>
+
+## Objectif
 {task description}
 
----
-Protocole coordination Hermes (chaque exécution) :
+## Protocole coordination Hermes (chaque exécution)
 1. LIRE workspace-cluster-coordination (intercom, 10 derniers) AVANT d'agir — identifier signaux/ASK/INTENT non répondus.
 2. Exécuter la tâche décrite ci-dessus.
 3. POSTER le résultat sur workspace-cluster-coordination avec tag adapté ([INFO]/[DONE]/[ALERT]) — OBLIGATOIRE, aucune exception.
-4. Vérifier CronList : si CE cron est expiré, le ré-armer (session-only, auto-expire 7j).
+4. Self-re-arm : CronList → CronDelete CE cron → CronCreate(cron: "{expr}", prompt: "/run-cron-task <slug>", recurring: true).
 
 Règles anti-hallucination : exécuter la commande AVANT de reporter une erreur. Ne JAMAIS reporter une erreur résolue ou historique.
 ```
+
+`<slug>` = kebab-case court dérivé de la description (ex. `vllm-latency`, `pr-stalled-audit`).
 
 ### 5. Arm the cron
 
 ```
 CronCreate(
   cron: "<expr from step 3>",
-  prompt: "<prompt from step 4>",
+  prompt: "/run-cron-task <slug>",
   recurring: true
 )
 ```
@@ -118,6 +124,7 @@ roosync_dashboard(
 
 ## Notes
 
-- **Session-only** : le cron meurt quand la session Claude se ferme. Au démarrage d'une nouvelle session, ré-invoquer `/fresh-task` (ou laisser la tâche se ré-armer elle-même via step 4 du prompt).
+- **Session-only** : le cron meurt quand la session Claude se ferme. Au démarrage d'une nouvelle session, ré-invoquer `/fresh-task` (ou laisser la tâche se ré-armer elle-même via le self-re-arm du doc de routine).
+- **Convention cron/commande** : le CronCreate porte TOUJOURS une commande (`/run-cron-task <slug>`), jamais un prompt inline. Le doc `.claude/cron-tasks/<slug>.md` est la source de vérité, relue à chaque fire — modifier LE DOC pour changer la routine.
 - **Pas de Telegram par défaut** : la tâche poste sur dashboard. N'ajouter la livraison Telegram que si la tâche le justifie (escalade, alerte user) — via `deliver: "telegram:<chat-id>"` côté job config.
 - **Conflit de cadence** : éviter de planifier plusieurs tâches au même top-minute (collision API). Le mapping off-minute ci-dessus distribue déjà les cadences courantes.

@@ -10,6 +10,10 @@
 
 One-shot cluster health check: read all dashboards, summarize state, identify actions needed.
 
+**Positionnement** : le tour de cluster régulier est fait par le cron **conteneur** `hermes-cluster-tour` (12h, :13 UTC, T#N). Cette commande opérateur est un **complément à la demande** (ou post-incident), PAS un doublon du cron conteneur.
+
+**Convention cron/commande** : si un cron de session doit driver cette commande, le CronCreate porte la **commande** (`prompt: "/cluster-tour"`), jamais un prompt inline. Self-re-arm en fin d'exécution : CronList → CronDelete le job → CronCreate(même expr, `prompt: "/cluster-tour"`, recurring: true).
+
 ---
 
 ## Steps
