@@ -214,15 +214,28 @@ def append_attribution_marker(body: str, *, lane: Optional[str] = None,
 # attestation only key holders can produce. The key is NEVER generated here:
 # deployment creates it (32 random bytes, mode 0600) inside the container;
 # this module only reads it, and degrades to unsigned markers without it.
-_DEFAULT_KEY_PATH = "/opt/data/hermes-ops/guard/attribution.key"
+
+
+def _default_key_path() -> str:
+    """``<hermes home>/hermes-ops/guard/attribution.key``.
+
+    Resolved through :func:`get_hermes_home` rather than hardcoding the
+    default home (``/opt/data`` in the stock container): a deployment that
+    overrides ``HERMES_HOME`` — the documented way to run isolated profiles —
+    would otherwise look for its key in another profile's tree and silently
+    degrade every marker to unsigned.
+    """
+    from hermes_constants import get_hermes_home
+
+    return str(get_hermes_home() / "hermes-ops" / "guard" / "attribution.key")
 
 
 def _attribution_key_path() -> str:
     """Key file location — ``HERMES_ATTRIBUTION_KEY`` (a PATH, never key
     material: env values are readable from ``/proc/<pid>/environ``) wins
-    over the container default."""
+    over the profile default."""
     env_path = os.environ.get("HERMES_ATTRIBUTION_KEY", "").strip()
-    return env_path or _DEFAULT_KEY_PATH
+    return env_path or _default_key_path()
 
 
 def _load_attribution_key() -> Optional[bytes]:
