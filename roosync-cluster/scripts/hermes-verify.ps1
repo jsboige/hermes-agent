@@ -7,7 +7,12 @@ $Container = "hermes"
 
 function Invoke-Hermes {
     param([string]$Command)
-    $result = docker exec $Container bash -c $Command 2>&1
+    # PowerShell strips embedded double quotes when passing args to docker.exe, so a
+    # command like:  python3 -c "import json,sys; ..."  arrives as:  python3 -c "import"
+    # -> SyntaxError. Base64 the command and decode it inside the container instead:
+    # no quote ever crosses the PowerShell/docker argument boundary.
+    $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
+    $result = docker exec $Container sh -c "echo $b64 | base64 -d | sh" 2>&1
     return $result
 }
 
@@ -29,7 +34,10 @@ Write-Host "=== HERMES VERIFICATION (12 checks) ===" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Gateway process running
-$proc = Invoke-Hermes 'ps aux | grep "hermes gateway run" | grep -v grep | wc -l'
+# The real cmdline is `/opt/hermes/.venv/bin/python -P -c "... hermes_cli.main ..." gateway run --replace`
+# — the literal "hermes gateway run" is never contiguous. Match the "gateway run"
+# suffix instead (bracket trick keeps grep itself out of the count).
+$proc = Invoke-Hermes 'ps aux | grep "[g]ateway run" | wc -l'
 if ($proc -match "([1-9])") { if (Check "Gateway process" "OK") { $Pass++ } else { $Fail++ } }
 else { if (Check "Gateway process" "not running ($proc)") { $Pass++ } else { $Fail++ } }
 
@@ -60,10 +68,11 @@ foreach ($f in @("config.yaml", ".env", ".env.secrets", "cron/jobs.json")) {
 if ($symOk) { if (Check "Symlinks (4)" "OK") { $Pass++ } else { $Fail++ } }
 
 # 6. Model correct
-# Phase 2 v3 (2026-06-25): main model is claude-sonnet-4-6 routed via claudish proxy
-# (po-2023), which remaps claude-sonnet-* -> gc@glm-5.2. Legacy glm-5-turbo/zai also valid.
+# Main model is routed via the claudish proxy (po-2023), which remaps the claude-*
+# family onto the fleet's inference budget. Accept any claude-* generation (the
+# exact version moves with upstream syncs) plus the legacy glm-* names.
 $model = Invoke-Hermes 'grep "^  default:" /opt/data/.hermes/config.yaml 2>/dev/null | head -1'
-if ($model -match "glm-5-turbo|claude-sonnet-4-6") { if (Check "Model" "OK") { $Pass++ } else { $Fail++ } }
+if ($model -match "claude-|glm-") { if (Check "Model" "OK") { $Pass++ } else { $Fail++ } }
 else { if (Check "Model" "$model") { $Pass++ } else { $Fail++ } }
 
 # 7. MCP servers in config
@@ -89,7 +98,9 @@ if ($kanban -match "OK") { if (Check "Kanban DB writable" "OK") { $Pass++ } else
 else { if (Check "Kanban DB writable" "$kanban") { $Pass++ } else { $Fail++ } }
 
 # 10. gh auth
-$gh = Invoke-Hermes 'gh auth status 2>&1 | head -1'
+# docker exec does not inherit the gateway process env: GH_TOKEN must be sourced from
+# /opt/data/.env explicitly, otherwise gh reports "not logged in" (false negative).
+$gh = Invoke-Hermes 'export GH_TOKEN=$(grep "^GH_TOKEN=" /opt/data/.env | cut -d= -f2-); gh auth status 2>&1 | head -2'
 if ($gh -match "Logged in") { if (Check "gh auth" "OK") { $Pass++ } else { $Fail++ } }
 else { if (Check "gh auth" "$gh") { $Pass++ } else { $Fail++ } }
 
@@ -103,7 +114,9 @@ if ($enabled -ge 3) { if (Check "Active crons ($enabled)" "OK") { $Pass++ } else
 else { if (Check "Active crons" "only $enabled") { $Pass++ } else { $Fail++ } }
 
 # 12. MCP connection health (no recent "giving up" in logs)
-$mcpHealth = Invoke-Hermes 'tail -200 /opt/data/logs/gateways/default/current 2>/dev/null | grep -c "giving up" || true'
+# /opt/data/logs/gateways/default/ holds s6-log rotated files (@<tai64n>.u), not a
+# "current" symlink — grep the rotated set plus the main agent log.
+$mcpHealth = Invoke-Hermes 'cat /opt/data/logs/gateways/default/@* /opt/data/logs/agent.log 2>/dev/null | tail -300 | grep -c "giving up" || true'
 $mcpHealth = ($mcpHealth -replace '\D','').Trim()
 if ([string]::IsNullOrWhiteSpace($mcpHealth)) { $mcpHealth = "0" }
 if ([int]$mcpHealth -eq 0) { if (Check "MCP health" "OK") { $Pass++ } else { $Fail++ } }
