@@ -312,6 +312,17 @@ EOF
 
 # 4. Restore .env — non-secret config + secrets from env/file
 echo "  -> Restoring .env with all tokens"
+# Resolve the aux GLM pair at SHELL level, before the heredoc. NEVER place an
+# if/else inside the heredoc body below: an unquoted heredoc writes it literally
+# (incident 2026-09-28: both branches landed in .env, dotenv last-definition-wins
+# made the revoked legacy key effective -> aux compression 401 on every retry).
+if [ -n "$CLAUDISH_PROXY_KEY" ]; then
+    GLM_API_KEY="$CLAUDISH_PROXY_KEY"
+    GLM_BASE_URL="${GLM_INGRESS_URL:-http://192.168.0.50:3000/v1}"
+else
+    GLM_API_KEY=${GLM_API_KEY:-}
+    GLM_BASE_URL=${GLM_BASE_URL:-https://open.bigmodel.cn/api/coding/paas/v4}
+fi
 cat > "$DATA/.env" << EOF
 TELEGRAM_ALLOWED_USERS=6541428999
 TELEGRAM_GROUP_ALLOWED_USERS=6541428999
@@ -325,19 +336,13 @@ HOME=/opt/data
 # XDG — prevent gateway-locks from landing in /root/.local/state
 XDG_STATE_HOME=/opt/data/.local/state
 
-# z.ai / GLM provider (still used by auxiliary tasks: compression, image, browser, web)
-# Aux GLM traffic rides the claudish hub ingress (po-2025) with the fleet proxy key.
-# The legacy direct z.ai key in .env.secrets (GLM_API_KEY) was revoked 2026-09-15;
-# it is kept only as fallback when CLAUDISH_PROXY_KEY is absent. Ingress canary
-# validated 2026-09-15: /v1/chat/completions Bearer -> 200 (glm-4.5-air).
-# GLM_INGRESS_URL allows overriding the hub address without editing this script.
-if [ -n "$CLAUDISH_PROXY_KEY" ]; then
-    GLM_API_KEY="$CLAUDISH_PROXY_KEY"
-    GLM_BASE_URL="${GLM_INGRESS_URL:-http://192.168.0.50:3000/v1}"
-else
-    GLM_API_KEY=${GLM_API_KEY:-}
-    GLM_BASE_URL=${GLM_BASE_URL:-https://open.bigmodel.cn/api/coding/paas/v4}
-fi
+# z.ai / GLM provider (auxiliary tasks: compression, image, browser, web).
+# Single pair — resolved at shell level in the section 4 prelude above.
+# 2026-09-28 incident: a previous version put the shell if/else here, inside
+# this unquoted heredoc body; both branches were written literally and the
+# revoked legacy pair (last definition wins) caused aux compression 401s.
+GLM_API_KEY="$GLM_API_KEY"
+GLM_BASE_URL="$GLM_BASE_URL"
 
 # Anthropic / claudish — VALIDATED WORKING 2026-08-07.
 # Gateway routes via the claudish hub (po-2025:3000 since 2026-09-15; the old
@@ -363,6 +368,27 @@ GH_TOKEN_JSBOIGEEPITA=${GH_TOKEN_JSBOIGEEPITA:-}
 GH_TOKEN_JSBOIGE=${GH_TOKEN_JSBOIGE:-}
 GH_TOKEN=${GH_TOKEN_CLUSTERMANAGER:-}
 EOF
+
+# 4b. Mirror .env into s6 container_environment. The 2026-10 upstream sync
+# spawns the gateway via a DYNAMIC s6 service (gateway-default, per-profile)
+# whose run script does NOT source /opt/data/.env — only our main-wrapper
+# does, and the dynamic respawn path bypasses it. with-contenv reads this
+# directory at EVERY service start, so writing the vars here makes every
+# spawn path see them. Without it, provider=anthropic resolves to
+# api.anthropic.com and 401s (incident 2026-10-07: cron jobs error after a
+# WSL-reboot respawn lost the env).
+if [ -d /run/s6/container_environment ]; then
+    set -a; . "$DATA/.env"; set +a
+    for v in ANTHROPIC_TOKEN ANTHROPIC_BASE_URL GLM_API_KEY GLM_BASE_URL \
+             TELEGRAM_BOT_TOKEN TELEGRAM_HOME_CHANNEL GH_TOKEN \
+             GH_TOKEN_CLUSTERMANAGER GH_TOKEN_JSBOIGEEPITA GH_TOKEN_JSBOIGE; do
+        eval "val=\${$v:-}"
+        if [ -n "$val" ]; then
+            printf '%s' "$val" > "/run/s6/container_environment/$v"
+        fi
+    done
+    echo "  -> Injected gateway env into /run/s6/container_environment"
+fi
 
 # 5. Fix jobs.json format
 echo "  -> Checking jobs.json format"
@@ -602,6 +628,61 @@ else:
 fi
 
 
+# 5f. Idempotent: CoursIA README-totals review rule in pr-review prompt.
+# 2026-09-24: arbitrage user relayed by ai-01|CoursIA on the global dashboard (ASK 08:50Z).
+# ai-01 merged jsboige/CoursIA#17029 (a README totals bump) that should never have passed;
+# user verbatim: "on n'a trop laisse passer de ces MAJ de totaux qui sont sans fin et inutiles".
+# The rule lands in CoursIA .claude/rules/pr-review-discipline.md via PR #17633 (still open),
+# so it is inlined here to take effect immediately and to survive rebuilds.
+# Normalize (strip then re-append) instead of a marker-guarded append: the first live
+# attempt keyed on a marker whose text never matched the injected heading, so the block
+# was appended again on every run (observed 2026-09-24: two copies in jobs.json).
+# No backticks in BLOCK: this python source sits inside a double-quoted bash string,
+# so backticks would be command-substituted by the shell before python ever sees them.
+echo "  -> Checking README-totals directive in pr-review prompt"
+if [ -f "$DATA/cron/jobs.json" ]; then
+python3 -c "
+import json, re
+path = '$DATA/cron/jobs.json'
+with open(path, 'r') as f:
+    data = json.load(f)
+BLOCK = (
+    '\n\n## DIRECTIVE README-TOTALS CoursIA #17633 (arbitrage user 2026-09-24)\n\n'
+    '**PR de README CoursIA dont la substance est une mise a jour de TOTAUX** (nombre de '
+    'notebooks, comptes par langage ou sous-dossier, comptes de cellules, bandeaux \"N notebooks\") '
+    '-> **CHANGES_REQUESTED**. Ces chiffres relevent de la regeneration du catalogue '
+    '(CATALOG-STATUS, #2651) : une ligne de compte fausse se SUPPRIME, elle ne se remet pas a jour. '
+    'Cette regle PRIME sur l ancien point E \"audit fichier entier des comptes\" de '
+    'pr-review-discipline.md : on n encadre pas ces PRs, on les ecarte.\n'
+    '**Apres l ajout d un notebook, une PR de README doit livrer le CORPS qui presente ce '
+    'notebook** : sa section, ses lignes de navigation, les acquis et les parcours, fidele au '
+    'notebook. Une PR de README qui ne bouge que des comptes est CHANGES_REQUESTED.\n'
+    'Source canonique : \".claude/rules/pr-review-discipline.md\" sur jsboige/CoursIA@main '
+    '(lecture : gh api repos/jsboige/CoursIA/contents/.claude/rules/pr-review-discipline.md '
+    '--jq .content | base64 -d) - PR de harnais #17633. Directive inline : elle precede le merge '
+    'et reste valable meme si #17633 n est pas encore mergee. Exemple fondateur : #17029 '
+    '(mergee a tort, revert #17632).\n'
+)
+ANCHOR = '\n## CHECKLIST REVIEW (par PR)'
+changed = False
+for job in data.get('jobs', []):
+    if job.get('name') == 'hermes-pr-review':
+        orig = job.get('prompt', '')
+        p = re.sub(r'\n+## DIRECTIVE README-TOTALS CoursIA #17633.*?(?=\n+## |\Z)', '', orig, flags=re.S)
+        p = p.replace(ANCHOR, BLOCK + ANCHOR, 1) if ANCHOR in p else p + BLOCK
+        if p != orig:
+            job['prompt'] = p
+            changed = True
+if changed:
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    print('  -> README-totals directive (re)applied to pr-review prompt')
+else:
+    print('  -> README-totals directive already canonical (no-op)')
+" 2>/dev/null || echo "  -> Warning: could not check README-totals directive"
+fi
+
+
 # 6. Install croniter
 echo "  -> Checking croniter"
 /opt/hermes/.venv/bin/python3 -c 'import croniter' 2>/dev/null && echo "  -> croniter already installed" || {
@@ -812,8 +893,18 @@ ANTH_URL=$(grep -c '^ANTHROPIC_BASE_URL=http://192.168.0.50:3000' "$DATA/.env" 2
 # direct z.ai key was revoked 2026-09-15). Verify presence WITHOUT printing values.
 KEY_LEN=$(grep -o '^CLAUDISH_PROXY_KEY=[0-9a-f]\{64\}$' "$DATA/.env.secrets" 2>/dev/null | head -1 | wc -c)
 [ "$KEY_LEN" -gt 0 ] && check "CLAUDISH_PROXY_KEY provisioned (aux GLM ingress auth)" "OK (value masked)" || check "CLAUDISH_PROXY_KEY" "not provisioned (aux GLM falls back to revoked direct key)"
+# Exactly ONE GLM pair, on the hub ingress. A second definition of either var
+# (broken heredoc, stray append) wins under dotenv last-definition-wins and
+# silently re-points aux at the revoked endpoint — count BOTH vars, not just
+# the hub URL (the 2026-09-28 .env passed the old check while broken).
+GLM_KEY_COUNT=$(grep -c '^GLM_API_KEY=' "$DATA/.env" 2>/dev/null || true)
+GLM_URL_COUNT=$(grep -c '^GLM_BASE_URL=' "$DATA/.env" 2>/dev/null || true)
 GLM_URL=$(grep -c '^GLM_BASE_URL=http://192.168.0.50:3000/v1$' "$DATA/.env" 2>/dev/null || true)
-[ "$GLM_URL" = "1" ] && check "GLM_BASE_URL (hub ingress)" "OK" || check "GLM_BASE_URL" "not on hub ingress (count=$GLM_URL)"
+if [ "$GLM_KEY_COUNT" = "1" ] && [ "$GLM_URL_COUNT" = "1" ] && [ "$GLM_URL" = "1" ]; then
+    check "GLM aux pair (unique, hub ingress)" "OK"
+else
+    check "GLM aux pair" "duplicate or off-hub (keys=$GLM_KEY_COUNT urls=$GLM_URL_COUNT on-hub=$GLM_URL)"
+fi
 
 # No duplicate provider: auto
 DUP=$(grep -c '^ *provider: "auto"' "$DATA/config.yaml" || true)
