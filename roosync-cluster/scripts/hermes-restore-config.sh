@@ -146,6 +146,35 @@ awk '
     !skip { print }
 ' "$DATA/config.yaml" > /tmp/config_mem.yaml && mv /tmp/config_mem.yaml "$DATA/config.yaml"
 
+# Point the main model at the claudish hub through a CUSTOM provider. Upstream's
+# default pairs claude-sonnet-* with NATIVE Anthropic, and the 2026-10 sync added
+# an endpoint validator (_anthropic_base_url_override_ok) that accepts only
+# api.anthropic.com / .claude.com / .azure.com hosts, or a URL whose path ends in
+# /anthropic. The ANTHROPIC_BASE_URL env route that worked pre-sync is therefore
+# IGNORED and the agent 401s against native Anthropic ("invalid x-api-key").
+# claudish (hub po-2025:3000) serves the native Messages protocol at the ROOT
+# (/v1/messages -> 200; /anthropic/v1/messages -> 404), which the validator
+# rejects. A custom_providers entry carries base_url + transport explicitly and
+# bypasses the native-endpoint validator. Incident 2026-10-07.
+echo "  -> Pointing main model at claudish hub (custom provider)"
+python3 - "$DATA/config.yaml" << 'PYEOF'
+import sys
+from ruamel.yaml import YAML
+p = sys.argv[1]
+y = YAML(typ="rt")
+d = y.load(open(p))
+d.setdefault("model", {})["provider"] = "claudish"
+d.pop("custom_providers", None)
+d["custom_providers"] = [{
+    "name": "claudish",
+    "base_url": "http://192.168.0.50:3000",
+    "api_mode": "anthropic_messages",
+    "key_env": "ANTHROPIC_TOKEN",
+}]
+y.dump(d, open(p, "w"))
+print("     model.provider=claudish + custom_providers entry")
+PYEOF
+
 # Require secrets — NO hardcoded fallbacks
 STT_API_KEY="${WHISPER_BEARER_TOKEN:-}"
 MCP_AUTH="${MCP_AUTH_TOKEN:-}"
