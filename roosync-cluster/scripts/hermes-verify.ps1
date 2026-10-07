@@ -1,4 +1,4 @@
-# hermes-verify.ps1 — 12-point post-op verification
+# hermes-verify.ps1 — 14-point post-op verification
 # Usage: .\roosync-cluster\scripts\hermes-verify.ps1
 # Runs checks inside the hermes container and reports PASS/FAIL.
 
@@ -6,13 +6,20 @@ $ErrorActionPreference = "Stop"
 $Container = "hermes"
 
 function Invoke-Hermes {
-    param([string]$Command)
+    param([string]$Command, [string]$User = "")
     # PowerShell strips embedded double quotes when passing args to docker.exe, so a
     # command like:  python3 -c "import json,sys; ..."  arrives as:  python3 -c "import"
     # -> SyntaxError. Base64 the command and decode it inside the container instead:
     # no quote ever crosses the PowerShell/docker argument boundary.
+    # Strip CR for the same reason people forget: this file is checked out with CRLF, so a
+    # multi-line here-string would reach sh with "\r" glued to every token -> `fi\r` is not
+    # `fi` and sh dies with "end of file unexpected (expecting \"fi\")".
+    $Command = $Command -replace "`r", ""
     $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Command))
-    $result = docker exec $Container sh -c "echo $b64 | base64 -d | sh" 2>&1
+    $execArgs = @("exec")
+    if ($User) { $execArgs += @("-u", $User) }
+    $execArgs += @($Container, "sh", "-c", "echo $b64 | base64 -d | sh")
+    $result = & docker @execArgs 2>&1
     return $result
 }
 
@@ -30,7 +37,7 @@ function Check {
 $Pass = 0
 $Fail = 0
 
-Write-Host "=== HERMES VERIFICATION (12 checks) ===" -ForegroundColor Cyan
+Write-Host "=== HERMES VERIFICATION (14 checks) ===" -ForegroundColor Cyan
 Write-Host ""
 
 # 1. Gateway process running
@@ -121,6 +128,58 @@ $mcpHealth = ($mcpHealth -replace '\D','').Trim()
 if ([string]::IsNullOrWhiteSpace($mcpHealth)) { $mcpHealth = "0" }
 if ([int]$mcpHealth -eq 0) { if (Check "MCP health" "OK") { $Pass++ } else { $Fail++ } }
 else { if (Check "MCP health" "$mcpHealth servers gave up") { $Pass++ } else { $Fail++ } }
+
+# 13. config.yaml parses strictly (no duplicate top-level key)
+# Incident 2026-10-07: the upstream default config grew a `memory:` key that our
+# restore script re-appended -> DuplicateKeyError. The GATEWAY tolerates it (falls back
+# to env/defaults) but the CRON SCHEDULER refuses every job at dispatch, so the cluster
+# looked alive (process green, Telegram OK, reviews OK) while all 5 crons were dead ~9h45.
+# Nothing in this script parsed the config, so 12/12 PASS was reported throughout.
+# NB: no heredoc — this script is itself piped into `sh` on stdin (see Invoke-Hermes),
+# so a `<<EOF` block would be consumed as commands. Single-quoted python, sh double-quoted.
+$cfgParse = Invoke-Hermes @'
+python3 -c "
+import re, sys
+p = '/opt/data/config.yaml'
+keys = []
+for line in open(p):
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*):', line)
+    if m: keys.append(m.group(1))
+dup = sorted(k for k in set(keys) if keys.count(k) > 1)
+if dup:
+    print('DUPKEY:' + ','.join(dup)); sys.exit(0)
+try:
+    from ruamel.yaml import YAML
+    y = YAML(typ='rt'); y.allow_duplicate_keys = False
+    y.load(open(p))
+    print('OK-strict')
+except ImportError:
+    print('OK-regex')
+except Exception as e:
+    print('PARSEERR:' + type(e).__name__)
+" 2>/dev/null || echo PYFAIL
+'@
+if ($cfgParse -match "OK-") { if (Check "Config strict parse" "OK") { $Pass++ } else { $Fail++ } }
+else { if (Check "Config strict parse" "$cfgParse") { $Pass++ } else { $Fail++ } }
+
+# 14. gateway process env carries ANTHROPIC_BASE_URL
+# Incident 2026-10-07 (second layer): upstream's per-profile dynamic s6 service
+# `gateway-default` respawns the gateway WITHOUT sourcing /opt/data/.env, unlike our
+# main-wrapper. The gateway then silently fell back to the native Anthropic endpoint and
+# every cron died on HTTP 401 `invalid x-api-key`. Presence of the var in
+# /proc/<pid>/environ is the regression guard (the value is not printed — the same block
+# holds the API key).
+# Two gotchas, both measured: `docker exec` runs as root by default, but Docker drops
+# CAP_SYS_PTRACE, so root gets EACCES reading another user's environ. The gateway runs as
+# `hermes`, so the read must be done as that same user (-u hermes).
+$gwEnv = Invoke-Hermes -User hermes @'
+pid=$(ps aux | grep "[g]ateway run" | awk '{print $2}' | head -1)
+if [ -z "$pid" ]; then echo NO_PID; exit 0; fi
+n=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -c '^ANTHROPIC_BASE_URL=..*')
+echo "ENVCHECK:$pid:$n"
+'@
+if ($gwEnv -match "ENVCHECK:\d+:[1-9]") { if (Check "Gateway env (base_url)" "OK") { $Pass++ } else { $Fail++ } }
+else { if (Check "Gateway env (base_url)" "$gwEnv") { $Pass++ } else { $Fail++ } }
 
 # Summary
 Write-Host ""
