@@ -172,8 +172,12 @@ else { if (Check "Config strict parse" "$cfgParse") { $Pass++ } else { $Fail++ }
 # Two gotchas, both measured: `docker exec` runs as root by default, but Docker drops
 # CAP_SYS_PTRACE, so root gets EACCES reading another user's environ. The gateway runs as
 # `hermes`, so the read must be done as that same user (-u hermes).
+# Third gotcha: "gateway run" also matches PID 17, the s6 rc.init WRAPPER
+# (`/bin/sh -e /run/s6/basedir/scripts/rc.init top .../main-wrapper.sh gateway run`), which is
+# root-owned and lower-numbered — so a bare `grep "gateway run" | head -1` picks the wrapper
+# and reports EACCES on a healthy container. Anchor on the interpreter instead.
 $gwEnv = Invoke-Hermes -User hermes @'
-pid=$(ps aux | grep "[g]ateway run" | awk '{print $2}' | head -1)
+pid=$(ps aux | grep "[.]venv/bin/python" | grep "gateway run" | awk '{print $2}' | head -1)
 if [ -z "$pid" ]; then echo NO_PID; exit 0; fi
 n=$(tr '\0' '\n' < /proc/$pid/environ 2>/dev/null | grep -c '^ANTHROPIC_BASE_URL=..*')
 echo "ENVCHECK:$pid:$n"
