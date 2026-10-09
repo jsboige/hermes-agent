@@ -388,6 +388,22 @@ Deployed as Windows Scheduled Task `Hermes-ClusterTour-Watchdog` (every 30 min o
 
 **Gotcha (fixed #3743, 2026-09-20):** the tour title format has drifted twice (`[CLUSTER-HEALTH] T#72` at T#72, then `[CLUSTER-HEALTH][DONE] T#112` at T#112 when dashboard appends render message tags inline) — after the second drift + a condensation archiving the last old-format block, `last_health` read `never` and EVERY verdict was a false MISSING. The title matcher now tolerates any number of intercalated bracketed tags; treat future title changes as a watchdog compatibility surface.
 
+### Silent cron-failure watchdog
+
+**Why:** a cron run can abort mid-flight and still be recorded `status=ok`. Measured 2026-10-08/09: **14 runs of 94 (~15%) across 4 of the 5 lanes** ended on a malformed tool call emitted by the hub-served model — `Tool call "tool_call" failed: missing required parameters: calls` — which the framework turns into the run's FINAL RESPONSE (181 chars), delivers to Telegram, and records as `ok`. Nothing in `jobs.json` shows it. Rate per lane over that window: pr-review 7/26, cluster-tour 2/2, inbox-poll 3/39, notebook-audit 1/25, self-check 1/2 — i.e. it scales with the lane's tool-call complexity, not uniformly. Zero occurrences in the ~250 retained outputs from 2026-09-12 to 2026-10-07, so the class is new with the 06/10 sync era. Only `hermes-cluster-tour` had a watchdog; the other four lanes were blind.
+
+**Watchdog:** `roosync-cluster/scripts/hermes-cron-output-watchdog.ps1` — independent observer, same pattern as `hermes-review-watchdog.ps1`. Reads the per-run reports the scheduler writes to `C:\Users\jsboi\.hermes\cron\output\<job-id>\<timestamp>.md` on the HOST volume, so it keeps alerting while the container is down — exactly when a silent failure is most likely to go unnoticed. Two signals: `THREAD-FAIL` (body carries the malformed-tool-call marker) and `SHORT-OUTPUT` (`Response Characters` under `MinChars`, default 300; a real report is ~400-2000 chars). Lane names are read from the live `jobs.json`, never hardcoded, so a renamed or added lane is labelled correctly.
+
+EVERY failure is written to the log (the rate is the data); Telegram alerts to the review chat are aggregated per tick and rate-limited by a state-file cooldown (3h). Already-reported files are remembered in the state, so a failure alerts once, not once per tick. A report modified in the last 2 minutes is skipped — it may still be flushing, and evaluating it mid-write would raise a false `SHORT-OUTPUT`.
+
+Deployed as Windows Scheduled Task `Hermes-CronOutput-Watchdog` (every 30 min at `:11/:41` — deliberately distinct from the `:07/:37` used by the review / MCP / status-collector watchdogs, and from the cluster-tour watchdog), via hidden VBS launcher `C:\ProgramData\claude-hidden-launchers\Hermes-CronOutput-Watchdog.vbs`. Registration did **not** need elevation (`InteractiveToken` / `Limited`).
+
+Deployment is reproducible from the repo: `hermes-cron-output-watchdog-task.xml` is a **template** (not registerable as-is — Task Scheduler rejects an empty `<UserId>`, and the machine's user SID is an identifier that does not belong in a public fork, so it carries a `__USER_SID__` token), and `register-cron-output-watchdog.ps1` resolves the current user's SID, owns the schedule, writes the launcher if missing, and **dry-runs by default** (`-Apply` to register).
+
+**Gotcha — THREAD-FAIL does NOT mean the work was lost.** The abort can land anywhere in the run, and the two measured cases differ: the 2026-10-08 12:13Z cluster-tour died BEFORE posting (T#161 never written; the tour watchdog alerted at 12:37Z), whereas the 2026-10-09 00:13Z cluster-tour posted **T#162 at 00:21:46Z and then died at 00:22:12Z** — the abort cost nothing but the run's own summary. So this organ reports the ABORT and stops there; whether work was lost is per-run and must be read from the report body. Only lane-specific watchdogs can judge that.
+
+**Gotcha — `-Seed`.** Arming on an existing backlog would fire a 14-item alert. Run the script once with `-Seed` to adopt everything currently in the window as already-known without alerting and without starting a cooldown. `-DryRun` validates detection and prints the exact Telegram message writing neither alert nor state; it is the required pre-arm proof.
+
 ### Cluster ASR
 
 `https://whisper-api.myia.io/v1` — self-hosted Whisper on po-2023. Auth via `WHISPER_BEARER_TOKEN` from `.env.secrets`.

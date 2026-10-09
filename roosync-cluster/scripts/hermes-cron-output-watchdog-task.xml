@@ -1,0 +1,48 @@
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <URI>\Hermes-CronOutput-Watchdog</URI>
+    <Description>Detecte les runs de cron Hermes qui ECHOUENT EN SILENCE. Un run peut mourir en vol (appel d'outil malforme emis par le modele servi par le hub) et etre quand meme enregistre status=ok : l'erreur devient la reponse finale du run, rien dans jobs.json ne le montre. Mesure 2026-10-08/09 : 14 runs sur 94 (~15%) sur 4 des 5 lanes. Lit les rapports par run sur le volume hote (cron/output/&lt;job-id&gt;/&lt;timestamp&gt;.md) donc fonctionne meme conteneur arrete. Deux signaux : THREAD-FAIL (marqueur d'appel d'outil malforme) et SHORT-OUTPUT (Response Characters sous le seuil). Journalise TOUJOURS, alerte Telegram agregee avec cooldown. Toutes les 30 min a :11/:41 (off-minutes, distincts des :07/:37 des autres watchdogs).</Description>
+    <Author>Hermes Agent workspace</Author>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <!-- TEMPLATE, not a registerable file as-is. Task Scheduler rejects an empty
+           UserId, so no SID is versioned here either: this repo is a public fork and
+           the user SID is an identifier. Deploy with register-cron-output-watchdog.ps1,
+           which resolves the current user's SID at run time and substitutes this token
+           (it also runs a dry run unless given -Apply). -->
+      <UserId>__USER_SID__</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure>
+      <Count>2</Count>
+      <Interval>PT5M</Interval>
+    </RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+    </IdleSettings>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>2026-10-09T09:11:00+02:00</StartBoundary>
+      <Repetition>
+        <Interval>PT30M</Interval>
+        <StopAtDurationEnd>true</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>//B //Nologo "C:\ProgramData\claude-hidden-launchers\Hermes-CronOutput-Watchdog.vbs"</Arguments>
+    </Exec>
+  </Actions>
+</Task>
