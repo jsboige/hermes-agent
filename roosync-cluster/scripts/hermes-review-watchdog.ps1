@@ -40,7 +40,14 @@
 
 param(
     [string[]]$TargetRepos = @("jsboige/CoursIA", "jsboige/roo-extensions"),
-    [string]$BotLogin = "jsboige",
+    # Resolved from the token identity at run time when left empty. Do NOT hardcode:
+    # the token identity has already drifted once. Reviews are currently posted as
+    # `clusterManager-Myia` while this watchdog filtered on `jsboige` -> it could
+    # never match a review, so it reported "has NEVER posted a review" every 30 min
+    # while reviews were landing hourly. It was blind to exactly the silent gap it
+    # exists to catch, and its ALERT text names a cause (pr-review failing) that the
+    # data contradicted.
+    [string]$BotLogin = "",
     [double]$AlertThresholdHours = 4.0,
     [double]$CooldownHours = 4.0,
     [int]$MaxPrsPerRepo = 20,
@@ -147,6 +154,22 @@ $script:GhHeaders = @{
     "User-Agent"           = "hermes-review-watchdog"
 }
 
+# Resolve the review bot's login from the token itself (see the $BotLogin note above).
+# Abort rather than continue with an empty login: an empty login matches no review,
+# which is indistinguishable from "the bot never reviews" and is the exact failure
+# this organ was blind to. Failing loudly is the only honest option here.
+if (-not $BotLogin) {
+    $me = Invoke-Gh "user"
+    if ($me -and $me.login) {
+        $BotLogin = $me.login
+        Write-Log "Bot login resolved from the token: $BotLogin" "INFO"
+    }
+    else {
+        Write-Log "Could not resolve the bot login from GH_TOKEN — review detection would match nothing and cry wolf. Aborting." "ERROR"
+        exit 1
+    }
+}
+
 # --- collect review activity across target repos ---
 
 $now = [datetime]::UtcNow
@@ -171,8 +194,12 @@ foreach ($repo in $TargetRepos) {
             if ($null -eq $latestReview -or $t -gt $latestReview) { $latestReview = $t }
         }
     }
+    # Label names the scan scope on purpose. This only inspects OPEN PRs, so a repo
+    # whose reviewed PRs have since been merged reads "never" - which is true of the
+    # open set but reads like "the bot never reviews here". Naming the scope keeps
+    # that line from being misread as an alarm.
     $age = if ($repoLatest) { (($now - $repoLatest).TotalHours).ToString("F1", $Invariant) + "h" } else { "never" }
-    $repoSummary += "$repo(open=$openCount,lastBotReview=$age)"
+    $repoSummary += "$repo(open=$openCount,lastBotReviewAmongOpenPrs=$age)"
 }
 
 # --- evaluate ---
@@ -216,9 +243,13 @@ if ($status -eq "ALERT") {
         if ((($now - $lastAlert).TotalHours) -lt $CooldownHours) { $cooldownOk = $false }
     }
     if ($cooldownOk) {
-        $shouldAlert = $true
         $msg = "[REVIEW-WATCHDOG] $summary`n`nThe pr-review cron may be failing silently (status=ok, zero output). Check: gateway logs for 429/timeout/auth errors, gh auth in container, provider health."
         $sent = Send-Telegram $msg
+        # Only a DELIVERED alert starts the cooldown. Setting $shouldAlert before the
+        # send meant a failed delivery (measured 2026-10-09 08:07Z, request timeout)
+        # still stamped LastAlert and suppressed the next 4h — the alert was silently
+        # lost. A failed send costs nothing to retry: nothing reaches Telegram.
+        $shouldAlert = $sent
         Write-Log "Alert sent to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
     }
     else {
