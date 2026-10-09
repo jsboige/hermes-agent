@@ -38,8 +38,10 @@ Identifie : le dernier `[STATUS 12h]`, le dernier Tour `[CLUSTER-HEALTH] T#N` su
    Red flag : 429/401/crash récents, ou cron qui n'a pas tourné.
 
 4. **Reviews bot actives** (sur l'hôte, compte jsboige) :
-   `gh api search/issues -f q="reviewed-by:clusterManager-Myia is:pr sort:updated-desc" --jq ".items[:3] | .[] | {n:.number, repo:.repository_url, updated:.updated_at}"`
+   `gh api -X GET search/issues -f q="reviewed-by:clusterManager-Myia is:pr" -f sort=updated -f order=desc --jq ".items[:3] | .[] | {n:.number, repo:.repository_url, updated:.updated_at}"`
    Red flag : dernière review > 4h (gap silencieux — le review-watchdog host couvre aussi ce cas).
+   PIEGE (corrige 09/10/2026) : sans `-X GET`, `-f` fait basculer `gh api` en POST (« POST if any parameters were added »), et `POST /search/issues` renvoie 404 Not Found. La commande telle qu'ecrite ici ne pouvait donc PAS fonctionner : check 4 etait mort. Un 404 sur un search = ce piege, pas un probleme de droits.
+   PIEGE 2 : l'auteur attendu est `clusterManager-Myia`, PAS `jsboige` (identite des tokens de la machine). Filtrer sur `jsboige` ne matche aucune review — c'est ce qui a rendu le review-watchdog aveugle jusqu'au 09/10.
 
 5. **Watchdogs host** :
    `schtasks /query /tn Hermes-Review-Watchdog /fo list | findstr /i "Last Result"`
