@@ -24,7 +24,8 @@ else
 fi
 
 # 1. Overwrite model config — claudish proxy route (Phase 2 v3 restored 2026-08-07)
-# Routes via claudish proxy (po-2023:3000): claude-sonnet-4-6 -> gc@glm-5.2.
+# Routes via the claudish hub (po-2025, 192.168.0.50:3000 since 2026-09-05 — NOT
+# po-2023/.46): claude-sonnet-4-6 is a sonnet role name, served as glm-5.3 on 2026-10-14.
 # Auth via x-proxy-key (mandatory since claudish auth hardening 2026-07-10) carried
 # in ANTHROPIC_CUSTOM_HEADERS. This is the prescribed fix from claudish (msg
 # msg-20260807T185007-xvk0jc) after the z.ai-native fallback was rejected by user

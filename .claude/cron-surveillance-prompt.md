@@ -56,7 +56,10 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 État courant tenu dans le post `[STATUS 3h]` (cases à cocher). Prends le premier item actionnable non
 bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise).
 
-- [ ] Telegram token (Q1 registre user) → puis `hermes-restore.ps1` + vérifier `Telegram state` PASS.
+- [ ] Telegram token (Q1 registre user) → puis `hermes-restore.ps1` + vérifier `Telegram state` PASS,
+      PUIS rebasculer la livraison des 4 jobs : `hermes cron edit <id> --deliver telegram:-1003904676273`
+      (passés en `local` le 14/10 : sans credentials Telegram, le preflight du scheduler BLOQUE tout job
+      livré sur Telegram avant même de lancer l'agent — `Status: BLOCKED (configuration)`).
 - [ ] Jobs bot repris un par un après validation (pr-review → ping-intercom → cluster-tour → morning-brief).
 - [ ] `[ONLINE]` sur global au premier cycle pr-review validé (handshake : NanoClaw revient à :15/:45).
 - [ ] Job notebook-audit #17073 (partition Hermes) reconstruit — prompt perdu avec po-2026 ; ledger
