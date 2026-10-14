@@ -39,7 +39,7 @@
 #>
 
 param(
-    [string[]]$TargetRepos = @("jsboige/CoursIA", "jsboige/roo-extensions"),
+    [string[]]$TargetRepos = @("jsboige/CoursIA", "jsboige/roo-extensions", "jsboige/jsboige-mcp-servers"),
     # Resolved from the token identity at run time when left empty. Do NOT hardcode:
     # the token identity has already drifted once. Reviews are currently posted as
     # `clusterManager-Myia` while this watchdog filtered on `jsboige` -> it could
@@ -48,16 +48,22 @@ param(
     # exists to catch, and its ALERT text names a cause (pr-review failing) that the
     # data contradicted.
     [string]$BotLogin = "",
+    # NanoClaw posts under the same login; only reviews whose body carries this
+    # marker are Hermes's. Without it, NanoClaw's reviews would mask a Hermes outage.
+    [string]$BodyMarker = "[Hermes",
     [double]$AlertThresholdHours = 4.0,
     [double]$CooldownHours = 4.0,
-    [int]$MaxPrsPerRepo = 20,
+    # How many of the most recently updated PRs the bot reviewed are inspected per repo.
+    [int]$MaxPrsPerRepo = 10,
     # Host volume (persists across container rebuilds) — read tokens here, NOT
     # from the container, so the watchdog works when the container is down.
     [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
     [string]$ReviewChatId = "-1003904676273",
     [string]$ContainerName = "hermes",
     [string]$LogPath = "$PSScriptRoot\..\logs\review-watchdog.log",
-    [string]$StateFile = "$PSScriptRoot\..\logs\review-watchdog-state.json"
+    [string]$StateFile = "$PSScriptRoot\..\logs\review-watchdog-state.json",
+    # Evaluate and log the verdict, but send no alert and write no state.
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -178,28 +184,33 @@ $latestReview = $null   # UTC [datetime] of the most recent bot review seen
 $repoSummary = @()
 
 foreach ($repo in $TargetRepos) {
-    $pulls = Invoke-Gh "repos/$repo/pulls?state=open&sort=created&direction=desc&per_page=$MaxPrsPerRepo"
+    # Open-PR count only: is there anything to review at all?
+    $pulls = Invoke-Gh "repos/$repo/pulls?state=open&per_page=100"
     if ($null -eq $pulls) { $repoSummary += "$repo=(query-failed)"; continue }
     $openCount = @($pulls).Count
     $totalOpenPrs += $openCount
     $repoLatest = $null
 
-    foreach ($pr in $pulls) {
-        $reviews = Invoke-Gh "repos/$repo/pulls/$($pr.number)/reviews"
+    # PRs the bot reviewed, most recently updated first, open or closed. Sampling the
+    # newest OPEN PRs instead missed every review whenever a fresh wave landed: on
+    # 14/10 22:32Z it read "never" for CoursIA 12 min after a Hermes review there.
+    $q = [uri]::EscapeDataString("repo:$repo is:pr reviewed-by:$BotLogin")
+    $found = Invoke-Gh "search/issues?q=$q&sort=updated&order=desc&per_page=$MaxPrsPerRepo"
+    if ($null -eq $found) { $repoSummary += "$repo=(search-failed)"; continue }
+    foreach ($item in $found.items) {
+        $reviews = Invoke-Gh "repos/$repo/pulls/$($item.number)/reviews?per_page=100"
         if ($null -eq $reviews) { continue }
-        foreach ($rv in ($reviews | Where-Object { $_.user.login -eq $BotLogin })) {
+        foreach ($rv in ($reviews | Where-Object { $_.user.login -eq $BotLogin -and ([string]$_.body).Contains($BodyMarker) })) {
             $t = ConvertTo-UtcDateTime $rv.submitted_at
             if ($null -eq $t) { continue }
             if ($null -eq $repoLatest -or $t -gt $repoLatest) { $repoLatest = $t }
             if ($null -eq $latestReview -or $t -gt $latestReview) { $latestReview = $t }
         }
     }
-    # Label names the scan scope on purpose. This only inspects OPEN PRs, so a repo
-    # whose reviewed PRs have since been merged reads "never" - which is true of the
-    # open set but reads like "the bot never reviews here". Naming the scope keeps
-    # that line from being misread as an alarm.
-    $age = if ($repoLatest) { (($now - $repoLatest).TotalHours).ToString("F1", $Invariant) + "h" } else { "never" }
-    $repoSummary += "$repo(open=$openCount,lastBotReviewAmongOpenPrs=$age)"
+    # The label names the scan scope: "none" means none among the inspected PRs,
+    # not that the bot never reviewed in this repo.
+    $age = if ($repoLatest) { (($now - $repoLatest).TotalHours).ToString("F1", $Invariant) + "h" } else { "none" }
+    $repoSummary += "$repo(open=$openCount,lastMarkedReview=$age)"
 }
 
 # --- evaluate ---
@@ -219,7 +230,7 @@ if ($totalOpenPrs -eq 0) {
 }
 elseif ($null -eq $hoursSince) {
     $status = "ALERT"
-    $detail = "$totalOpenPrs open PR(s) but the bot ($BotLogin) has NEVER posted a review"
+    $detail = "$totalOpenPrs open PR(s) but no review marked '$BodyMarker' by $BotLogin among the $MaxPrsPerRepo most recently updated PRs it reviewed in each repo"
 }
 elseif ($hoursSince -ge $AlertThresholdHours) {
     $status = "ALERT"
@@ -231,6 +242,11 @@ else {
 
 $summary = "$status - $detail. Repos: $($repoSummary -join '; '). Container: $(if($containerUp){'up'}else{'DOWN'})."
 Write-Log $summary $(if ($status -eq "ALERT") { "ERROR" } else { "INFO" })
+
+if ($DryRun) {
+    Write-Log "DRY RUN - no alert sent, state not written$(if ($status -eq 'ALERT') { ' (a real run would have alerted, cooldown permitting)' })." "INFO"
+    exit 0
+}
 
 # --- alert (with cooldown) ---
 
