@@ -71,6 +71,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       Ouvert : qui audite `Compression/` (non assigné).
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
+      14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
+      Prochain geste : `register-cron-output-watchdog.ps1 -Apply` (dry-run posté au STATUS 3h 17:03Z). Les watchdogs
+      review et cluster-tour n'ont pas de `-DryRun` : l'ajouter avant de les enregistrer (cluster-tour écrit sur `global.md`).
 - [ ] Backup volume (`hermes-backup.ps1` remappé) — snapshot AVANT tout rebuild.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup.
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
