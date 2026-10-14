@@ -1,0 +1,45 @@
+# docker-compose.ai-01.yml — Hermes seat on myia-ai-01 (failover doctrine)
+#
+# Same shape as docker-compose.windows.yml (no host network, explicit ports,
+# Windows bind mount) but BUILDS THE FORK instead of pulling the upstream
+# image — the seat must run the fork's drift (watchdog fixes, harness commits).
+#
+# Doctrine (user decision 2026-10-14): po-2026 HS, no ETA. This seat on ai-01
+# is the INTERIM PRIMARY. When po-2026 returns, its base restarts there and
+# this seat becomes FAILOVER (never two active pollers on @MyIAHermesBot —
+# stop the gateway service here before po-2026 starts its own).
+#
+# Usage (from repo root):
+#   docker compose -f roosync-cluster/docker/docker-compose.ai-01.yml up -d --build
+#   .\roosync-cluster\scripts\hermes-restore.ps1     # config + secrets + verify
+#   docker restart hermes
+#
+# Volume: C:\Users\MYIA\.hermes  (seeded by SEAT-AI-01.md §Volume prep)
+
+services:
+  gateway:
+    build: ../..
+    image: hermes-agent:ai-01
+    container_name: hermes
+    restart: unless-stopped
+    volumes:
+      - C:/Users/MYIA/.hermes:/opt/data
+    environment:
+      - HERMES_UID=10000
+      - HERMES_GID=10000
+    command: ["gateway", "run"]
+
+  dashboard:
+    image: hermes-agent:ai-01
+    container_name: hermes-dashboard
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    volumes:
+      - C:/Users/MYIA/.hermes:/opt/data
+    environment:
+      - HERMES_UID=10000
+      - HERMES_GID=10000
+    ports:
+      - "127.0.0.1:9119:9119"
+    command: ["dashboard", "--host", "0.0.0.0", "--port", "9119", "--no-open", "--insecure"]
