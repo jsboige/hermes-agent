@@ -86,7 +86,7 @@ bootstrap prompts automatically — anchors are in place).
 | Job | Schedule | Notes |
 |-----|----------|-------|
 | `hermes-pr-review` | `5,35 * * * *` | slots :00/:30 (recovery-doc offset :05/:35); NanoClaw holds :15/:45 after revert |
-| `hermes-cluster-tour` | `37 */3 * * *` | light tour, inventory-authoritative health |
+| `hermes-cluster-tour` | `13 */12 * * *` | posts `[CLUSTER-HEALTH] T#N` on global every fire (po-2026 cadence and format, numbering continued from T#163; prompt source `roosync-cluster/prompts/hermes-cluster-tour.prompt.md`) |
 | `hermes-morning-brief` | `0 8 * * *` | 5-line bilan on Telegram |
 | `ping-intercom` | every 30 min | light coordination check, SILENT on RAS |
 
