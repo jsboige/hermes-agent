@@ -43,6 +43,10 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    `gh api -X GET search/issues -f q="reviewed-by:clusterManager-Myia is:pr" -f sort=updated -f order=desc --jq ".items[:5] | .[] | {n:.number, repo:.repository_url, updated:.updated_at}"`
    puis vérifier qu'au moins une review récente porte le marqueur `[Hermes` (NanoClaw poste sous le même
    compte avec `[NanoClaw`). PIÈGE : `-X GET` obligatoire (sinon POST → 404).
+   **Identité du bot** : `docker exec -u hermes hermes sh -c 'env -u GH_TOKEN HOME=/opt/data gh api user --jq .login'`
+   doit répondre `clusterManager-Myia`, et `grep -rl GH_TOKEN_JSBOIGE /c/Users/MYIA/.hermes/skills /c/Users/MYIA/.hermes/memories`
+   ne doit lister que des interdictions. Le bot écrit ses propres skills : le 14/10, il s'en est écrit une qui l'envoyait
+   sur le compte PERSONNEL de l'opérateur (#17782). Toute écriture GitHub du bot sous `jsboige` = escalade.
 5. **Telegram** : `grep -c '^TELEGRAM_BOT_TOKEN=.\+' C:\Users\MYIA\.hermes\.env.secrets` ; si 1, état
    plateforme dans `gateway_state.json` (`platforms.telegram.state` = connected). Tant que 0 : Q1 du
    registre reste ouverte (ne pas re-poser au fil).
@@ -60,10 +64,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       PUIS rebasculer la livraison des 4 jobs : `hermes cron edit <id> --deliver telegram:-1003904676273`
       (passés en `local` le 14/10 : sans credentials Telegram, le preflight du scheduler BLOQUE tout job
       livré sur Telegram avant même de lancer l'agent — `Status: BLOCKED (configuration)`).
-- [ ] Jobs bot repris un par un après validation (pr-review → ping-intercom → cluster-tour → morning-brief).
-- [ ] `[ONLINE]` sur global au premier cycle pr-review validé (handshake : NanoClaw revient à :15/:45).
-- [ ] Job notebook-audit #17073 (partition Hermes) reconstruit — prompt perdu avec po-2026 ; ledger
-      à re-dériver depuis les checklists GitHub ; ne PAS chevaucher la partition NanoClaw (GenAI).
+- [x] Jobs bot repris un par un après validation : pr-review, ping-intercom, cluster-tour (14/10). Reste morning-brief
+      (Telegram seul : inutile tant que la livraison est `local`).
+- [x] `[ONLINE]` sur global (14/10 11:37Z) → NanoClaw a levé sa compensation à 12:19Z (:15/:45).
+- [x] Job notebook-audit #17073 reconstruit (`99adb22edff5`, :50) ; ledger re-dérivé 442/749 le 14/10.
+      Ouvert : qui audite `Compression/` (non assigné).
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
 - [ ] Backup volume (`hermes-backup.ps1` remappé) — snapshot AVANT tout rebuild.
