@@ -64,7 +64,9 @@ param(
     # Hermes home on the host volume (persists across rebuilds).
     [string]$HermesHome = "$env:USERPROFILE\.hermes",
     # A run whose response is shorter than this produced nothing meaningful.
-    [int]$MinChars = 300,
+    # 200, not 300: the pr-review prompt asks for 1-3 lines, and a real 3-review
+    # report measured 285 chars on ai-01 (14/10). The known abort body is 181.
+    [int]$MinChars = 200,
     # Only inspect reports modified this recently.
     [double]$LookbackHours = 26.0,
     # At most one aggregated Telegram alert per cooldown window.

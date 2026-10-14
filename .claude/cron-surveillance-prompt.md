@@ -43,6 +43,9 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    `gh api -X GET search/issues -f q="reviewed-by:clusterManager-Myia is:pr" -f sort=updated -f order=desc --jq ".items[:5] | .[] | {n:.number, repo:.repository_url, updated:.updated_at}"`
    puis vérifier qu'au moins une review récente porte le marqueur `[Hermes` (NanoClaw poste sous le même
    compte avec `[NanoClaw`). PIÈGE : `-X GET` obligatoire (sinon POST → 404).
+   Sur les reviews `[Hermes` de la fenêtre : 0 doublon au même `commit_id`, et aucun corps < 200 car. ni
+   littéral `@/…` / `@fichier.md` (le 14/10, #20702 a reçu un corps `@/tmp/review_20702.md` de 21 car. :
+   un contrôle des seuls doublons ne le voit pas).
    **Identité du bot** : `docker exec -u hermes hermes sh -c 'env -u GH_TOKEN HOME=/opt/data gh api user --jq .login'`
    doit répondre `clusterManager-Myia`, et `grep -rl GH_TOKEN_JSBOIGE /c/Users/MYIA/.hermes/skills /c/Users/MYIA/.hermes/memories`
    ne doit lister que des interdictions. Le bot écrit ses propres skills : le 14/10, il s'en est écrit une qui l'envoyait
@@ -72,8 +75,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
-      Prochain geste : `register-cron-output-watchdog.ps1 -Apply` (dry-run posté au STATUS 3h 17:03Z). Les watchdogs
-      review et cluster-tour n'ont pas de `-DryRun` : l'ajouter avant de les enregistrer (cluster-tour écrit sur `global.md`).
+      `Hermes-CronOutput-Watchdog` enregistré le 14/10 19:34Z (non élevé, :11/:41 ; sans token Telegram il ne fait que
+      journaliser dans `roosync-cluster/logs/`). Reste : les watchdogs review et cluster-tour n'ont pas de `-DryRun` :
+      l'ajouter avant de les enregistrer (cluster-tour écrit sur `global.md`).
 - [ ] Backup volume (`hermes-backup.ps1` remappé) — snapshot AVANT tout rebuild.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup.
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.

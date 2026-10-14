@@ -38,5 +38,5 @@ UN commentaire sur l'issue de SÉRIE (RAS si rien). Série sans issue : l'ouvrir
 Marquer audité (date serveur). Re-dériver la population (même filtre) : added_since_prev, removed_since_prev, non-assignés ; rename (même nom normalisé) = statut porté. Drift ≠ 0 → 1 ligne sur #17073. Idempotence : rebuild relancé, le notebook reste audité.
 
 ## Sortie
-roosync_dashboard append, workspace hermes-agent, tags [DONE], messageId `hermes-audit-<AAAAMMJJ>T<hhmm>Z` : UNE ligne — notebook, findings (nb/classes), issue + commentaire, checklist, organes, ledger X/Y, drift, skips, C5.
+roosync_dashboard append, workspace hermes-agent, tags [DONE], messageId `hermes-audit-<AAAAMMJJ>T<hhmm>Z` (heure réelle lue au terminal juste avant l'append : `date -u +%Y%m%dT%H%MZ`) : UNE ligne — notebook, findings (nb/classes), issue + commentaire, checklist, organes, ledger X/Y, drift, skips, C5.
 Réponse finale (Telegram) : 1-3 lignes. Jamais [SILENT]. Bus RSM KO → écrire `/opt/data/audit-17073/pending-<date>.md` et le dire.
