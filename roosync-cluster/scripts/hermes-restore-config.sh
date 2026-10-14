@@ -380,13 +380,20 @@ GLM_BASE_URL="$GLM_BASE_URL"
 # Auth: claudish accepts Hermes's native x-api-key header (a third-party anthropic
 # endpoint makes build_anthropic_client send api_key as x-api-key). x-proxy-key is
 # NOT required on /v1/messages — proven by a direct probe (HTTP 200 + glm-5.2 body)
-# and an end-to-end `hermes -z` returning a correct, instruction-following reply.
+# and an end-to-end 'hermes -z' returning a correct, instruction-following reply.
+# (No backticks in this heredoc: it is unquoted, so they would EXECUTE the command.)
 # NOTE: ANTHROPIC_CUSTOM_HEADERS is NOT read by Hermes (grep across .py = 0 refs),
 # so x-proxy-key cannot be sent via env regardless; if claudish later enforces it,
 # a custom_providers block (transport: anthropic_messages + extra_headers) is the
 # only mechanism. NEVER log the key.
+# UPDATE 2026-10-14 (ai-01 seat): the hub now ENFORCES the proxy key — a request
+# with x-api-key=placeholder gets 401 "keyless request for claude-sonnet-4-6
+# resolves to a server-held credential (glm-5.3) — proxy key required". Probed:
+# the hub accepts the fleet proxy key as x-proxy-key OR as x-api-key, so the
+# custom provider's key_env (ANTHROPIC_TOKEN -> x-api-key) carries it. The alias
+# now resolves to glm-5.3.
 ANTHROPIC_BASE_URL=http://192.168.0.50:3000
-ANTHROPIC_TOKEN=placeholder
+ANTHROPIC_TOKEN=${CLAUDISH_PROXY_KEY:-placeholder}
 
 # Telegram bot
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
@@ -437,8 +444,10 @@ for job in data.get('jobs', []):
     # Remove toolset restrictions — cluster crons need full access
     if 'enabled_toolsets' in job:
         del job['enabled_toolsets']
-    # Re-enable paused jobs
-    if job.get('enabled') is False:
+    # Re-enable paused jobs — except an explicit operator hold (paused_reason
+    # prefixed 'operator-hold:'), which only the operator lifts. This script runs
+    # on every boot, so without the exception a deliberate hold dies at restart.
+    if job.get('enabled') is False and not str(job.get('paused_reason') or '').startswith('operator-hold:'):
         job['enabled'] = True
         job.pop('paused_at', None)
         job.pop('paused_reason', None)
@@ -833,7 +842,10 @@ chmod 755 /root
 # 7/7 retries (inbox-poll, pr-review). Fix: sitecustomize module that
 # retypes dict thinking blocks into proper ThinkingBlock instances
 # before accumulation. Idempotent: skips if .pth already present.
-SP_DIR="/opt/hermes/.venv/lib/python3.13/site-packages"
+# Resolved from the venv interpreter: the image's Python minor moves with upstream
+# syncs (3.13 -> 3.14 on the 2026-10 ai-01 build) and a hardcoded path aborts the
+# whole restore here under set -e, skipping the verification block.
+SP_DIR="$(/opt/hermes/.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 if [ ! -f "$SP_DIR/zz_claudish_thinking_patch.pth" ]; then
     cat > "$SP_DIR/zz_claudish_thinking_patch.py" <<'ZCEOF'
 """claudish/GLM emits thinking content blocks without the required signature
