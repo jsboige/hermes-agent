@@ -35,7 +35,7 @@
     INDEPENDENT observer: reads everything from the HOST volume, so it keeps
     working when the Hermes container itself is down (exactly when the gap is most
     likely). Sources:
-      - C:\Users\jsboi\.hermes\cron\jobs.json   → job 525e5650a8ac fire anchor:
+      - %USERPROFILE%\.hermes\cron\jobs.json   → cluster-tour job fire anchor:
         last_dispatch.dispatched_at (START of the run), fallback last_run_at
       - G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md
         → last message block timestamp containing [CLUSTER-HEALTH]
@@ -76,10 +76,10 @@
 #>
 
 param(
-    [string]$ClusterTourJobId = "525e5650a8ac",
-    [string]$JobsFile = "C:\Users\jsboi\.hermes\cron\jobs.json",
+    [string]$ClusterTourJobId = "",   # empty = the job named *cluster-tour* (ids differ per seat)
+    [string]$JobsFile = "$env:USERPROFILE\.hermes\cron\jobs.json",
     [string]$GlobalDashFile = "G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md",
-    [string]$HostEnvFile = "C:\Users\jsboi\.hermes\.env",
+    [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
     [string]$ReviewChatId = "-1003904676273",
     [double]$PostMarginMinutes = 15.0,   # how long after a fire the global post may appear
     [double]$CooldownMinutes = 120.0,    # min gap between alerts
@@ -164,7 +164,7 @@ function Get-ClusterTourFireAnchor {
     try {
         $data = Get-Content $JobsFile -Raw | ConvertFrom-Json
         foreach ($job in $data.jobs) {
-            if ("$($job.id)" -eq $ClusterTourJobId -and $job.name -like "*cluster-tour*") {
+            if ((-not $ClusterTourJobId -or "$($job.id)" -eq $ClusterTourJobId) -and $job.name -like "*cluster-tour*") {
                 $anchor = $null
                 if ($job.last_dispatch -and $job.last_dispatch.dispatched_at) {
                     $anchor = ConvertTo-UtcDateTime $job.last_dispatch.dispatched_at

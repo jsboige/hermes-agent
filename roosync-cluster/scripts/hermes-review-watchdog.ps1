@@ -53,7 +53,7 @@ param(
     [int]$MaxPrsPerRepo = 20,
     # Host volume (persists across container rebuilds) — read tokens here, NOT
     # from the container, so the watchdog works when the container is down.
-    [string]$HostEnvFile = "C:\Users\jsboi\.hermes\.env",
+    [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
     [string]$ReviewChatId = "-1003904676273",
     [string]$ContainerName = "hermes",
     [string]$LogPath = "$PSScriptRoot\..\logs\review-watchdog.log",

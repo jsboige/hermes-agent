@@ -24,7 +24,8 @@
       SHORT-OUTPUT — `Response Characters` below MinChars. A real report is
                      ~400-2000 chars; a run that produced nothing meaningful is
                      a few dozen. This is the cheapest instrument that would
-                     have caught all 11.
+                     have caught all 11. A response that is exactly `[SILENT]`
+                     (an idle cycle, e.g. ping-intercom) is exempt.
 
     IMPORTANT — THREAD-FAIL does NOT mean the run's work was lost. The abort can
     land anywhere in the run, and the two measured cases differ:
@@ -61,7 +62,7 @@
 
 param(
     # Hermes home on the host volume (persists across rebuilds).
-    [string]$HermesHome = "C:\Users\jsboi\.hermes",
+    [string]$HermesHome = "$env:USERPROFILE\.hermes",
     # A run whose response is shorter than this produced nothing meaningful.
     [int]$MinChars = 300,
     # Only inspect reports modified this recently.
@@ -70,7 +71,7 @@ param(
     [double]$CooldownHours = 3.0,
     # Cap on remembered filenames (keeps the state file small).
     [int]$MaxSeen = 400,
-    [string]$HostEnvFile = "C:\Users\jsboi\.hermes\.env",
+    [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
     [string]$ReviewChatId = "-1003904676273",
     # Validate detection and logging without sending any Telegram alert, and
     # without touching the state file. Use this to prove the organ works before
@@ -208,7 +209,10 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
             $m = [regex]::Match($body, 'Response Characters:\*{0,2}\s*(\d+)')
             if ($m.Success) {
                 $chars = [int]$m.Groups[1].Value
-                if ($chars -lt $MinChars) { $reason = "SHORT-OUTPUT" }
+                # A response that is exactly [SILENT] is the agent's explicit
+                # "nothing to report" (ping-intercom's normal idle cycle), not a failure.
+                $silent = $body -match '## Response\s*\[SILENT\]\s*$'
+                if ($chars -lt $MinChars -and -not $silent) { $reason = "SHORT-OUTPUT" }
             }
         }
 
@@ -276,6 +280,9 @@ else {
 }
 
 # --- persist state ---
+
+# A dry run that found nothing still reaches this point: it must not write either.
+if ($DryRun) { exit 0 }
 
 # Remember every failure reported so a later tick never double-counts it.
 # Successful reports are deliberately NOT remembered: they can never turn into
