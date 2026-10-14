@@ -76,8 +76,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
       `Hermes-CronOutput-Watchdog` enregistré le 14/10 19:34Z (non élevé, :11/:41 ; sans token Telegram il ne fait que
-      journaliser dans `roosync-cluster/logs/`). Reste : les watchdogs review et cluster-tour n'ont pas de `-DryRun` :
-      l'ajouter avant de les enregistrer (cluster-tour écrit sur `global.md`).
+      journaliser dans `roosync-cluster/logs/`). Watchdog review corrigé + `-DryRun` (d7304f3aee, 14/10 22:34Z :
+      marqueur `[Hermes` + recherche `reviewed-by`) ; reste à l'enregistrer — il n'a ni XML ni script `register-*`
+      (calquer ceux du cron-output). Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
+      `Add-Content` direct sur `global.md` (l.238), qui contourne la moitié PG du dashboard v3 ; à repasser par le
+      MCP/CLI RooSync d'abord.
 - [ ] Backup volume (`hermes-backup.ps1` remappé) — snapshot AVANT tout rebuild.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup.
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
