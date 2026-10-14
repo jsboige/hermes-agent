@@ -753,23 +753,37 @@ else
 fi
 
 # 7c. gh auth login with GH_TOKEN (persists to /opt/data so it survives restarts)
+# The agent's terminal strips GH_TOKEN/GITHUB_TOKEN (Tier-1, local_env_policy.py), so
+# the bot's gh only authenticates through a STORED login: hosts.yml in the hermes
+# user's config dir ($HOME=/opt/data). `gh auth login` refuses to store anything
+# while GH_TOKEN is set (sourced from .env.secrets above), and the old `|| true`
+# plus a `gh auth status` that read that same GH_TOKEN reported a false success.
+# Measured on the ai-01 seat 2026-10-14: .config/gh empty and root-owned, the bot
+# found gh unauthenticated and posted an audit under GH_TOKEN_JSBOIGE (the
+# operator's PERSONAL account on that seat).
 echo "  -> Configuring gh CLI auth"
 GH_TOKEN_VAL="${GH_TOKEN_CLUSTERMANAGER:-}"
+GH_CFG=/opt/data/.config/gh
+gh_stored_login() { env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$GH_CFG" gh api user --jq .login 2>/dev/null; }
 if [ -n "$GH_TOKEN_VAL" ]; then
     # Persist gh config to /opt/data so it survives container restarts
-    mkdir -p /opt/data/.config/gh
+    mkdir -p "$GH_CFG"
     ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
-    echo "$GH_TOKEN_VAL" | gh auth login --with-token 2>/dev/null || true
-    if gh auth status &>/dev/null; then
-        echo "  -> gh auth configured (token from GH_TOKEN_CLUSTERMANAGER)"
+    printf '%s\n' "$GH_TOKEN_VAL" | env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$GH_CFG" \
+        gh auth login --hostname github.com --with-token --insecure-storage 2>/dev/null || true
+    chown -R 10000:10000 /opt/data/.config 2>/dev/null || true
+    chmod 700 "$GH_CFG" 2>/dev/null || true
+    GH_LOGIN="$(gh_stored_login)"
+    if [ -n "$GH_LOGIN" ]; then
+        echo "  -> gh auth stored for the bot: $GH_LOGIN (token from GH_TOKEN_CLUSTERMANAGER)"
     else
-        echo "  -> Warning: gh auth login failed"
+        echo "  -> Warning: gh auth login failed (no stored login usable without GH_TOKEN)"
     fi
 else
     # Try reusing existing auth if already in /opt/data/.config/gh
     if [ -d "/opt/data/.config/gh" ]; then
         ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
-        if gh auth status &>/dev/null; then
+        if [ -n "$(gh_stored_login)" ]; then
             echo "  -> gh auth restored from /opt/data/.config/gh"
         else
             echo "  -> Warning: GH_TOKEN_CLUSTERMANAGER not set, gh auth not configured"
@@ -1000,7 +1014,9 @@ command -v gh &>/dev/null && check "gh CLI" "OK" || check "gh CLI" "not installe
 command -v jq &>/dev/null && check "jq" "OK" || check "jq" "not installed"
 
 # gh auth
-gh auth status &>/dev/null && check "gh auth" "OK" || check "gh auth" "not configured"
+# What the BOT sees: no GH_TOKEN in its terminal, stored login as user hermes.
+GH_BOT_LOGIN="$(su -s /bin/sh hermes -c 'env -u GH_TOKEN -u GITHUB_TOKEN HOME=/opt/data gh api user --jq .login' 2>/dev/null)"
+[ "$GH_BOT_LOGIN" = "clusterManager-Myia" ] && check "gh auth" "OK" || check "gh auth" "bot sees '${GH_BOT_LOGIN:-unauthenticated}', expected clusterManager-Myia"
 
 # gh config persisted
 [ -d "/opt/data/.config/gh" ] && check "gh config persisted" "OK" || check "gh config persisted" "not found in /opt/data"
