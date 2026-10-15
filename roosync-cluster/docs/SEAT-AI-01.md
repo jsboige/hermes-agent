@@ -107,8 +107,12 @@ the nanoclaw seat watches for it to revert the NanoClaw review cadence `0,15,30,
    expectations — review each before registering on ai-01 (paths `C:\Users\jsboi\…` need
    remapping to `C:\Users\MYIA\…`). Check for collisions with existing ai-01 scheduled tasks
    (`NanoClaw-Watchdog`, `MCP-Chain-Watchdog`).
-3. **Backup**: `hermes-backup.ps1` hardcodes po-2026 paths — remap before first use. Until then,
-   the volume is un-snapshotted (incident precedent 2026-05-14 — snapshot BEFORE any rebuild).
+3. **Backup**: `hermes-backup.ps1` follows `%USERPROFILE%` (remapped 15/10), uses the local
+   `alpine:3.19`, always restarts the container (`try/finally`) and has `-DryRun`. It STOPS the bot:
+   run it when no job is in flight (`last_dispatch.dispatched_at` ≤ `last_run_at` for every enabled
+   job in `cron/jobs.json`) — pr-review runs 10-30 min every 30 min, so the gaps are short. Until the
+   first real run, the volume is un-snapshotted (incident precedent 2026-05-14 — snapshot BEFORE any
+   rebuild).
 
 ## Failover switch (when po-2026 returns)
 

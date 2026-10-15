@@ -87,7 +87,10 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `Get-ScheduledTaskInfo Hermes-*` LastTaskResult 0x0. Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
       `Add-Content` direct sur `global.md` (l.238), qui contourne la moitié PG du dashboard v3 ; à repasser par le
       MCP/CLI RooSync d'abord.
-- [ ] Backup volume (`hermes-backup.ps1` remappé) — snapshot AVANT tout rebuild.
+- [ ] Backup volume — snapshot AVANT tout rebuild. Script remappé + `-DryRun` le 15/10 (dry-run OK : volume
+      `C:\Users\MYIA\.hermes`, image `alpine:3.19` locale, 0 rotation). Reste le vrai run : il ARRÊTE le bot,
+      donc seulement quand aucun job n'est en vol (`dispatched_at` ≤ `last_run_at` partout dans `jobs.json`).
+      Le 15/10 04:48Z, pr-review + ping-intercom tournaient : reporté.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup.
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
 
