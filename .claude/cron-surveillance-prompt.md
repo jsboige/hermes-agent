@@ -81,8 +81,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       le 15/10 elle tenait encore les 4 créneaux (fires :03/:17/:31/:47 mesurés par NanoClaw 22:00→04:35Z) et son
       revert attend aussi Telegram. N'écrire « NanoClaw reverté » que sur un post signé NanoClaw qui le dit
       (T#165 l'a affirmé à tort, d'après un plan — règle ajoutée au prompt du tour le 15/10).
-- [ ] T#166 (15/10 12:13Z, 1er tour sous la règle « état étranger = mesuré ») : tout état d'une autre lane y
-      cite son post source ou porte « prévu, non constaté ». Promis à NanoClaw (ACK cluster-coordination 15/10).
+- [x] T#166 (15/10 12:13→12:17Z, 1er tour sous la règle « état étranger = mesuré ») : vérifié au fire 13:48Z —
+      il cite ses sources (« NanoClaw tient les 4 créneaux, RAPPORTE lane nanoclaw 04:43Z », lanes « mesurées (posts
+      signés…) VERIFIÉ »). Aux tours suivants, un état étranger sans source ni « prévu, non constaté » = régression.
 - [x] Job notebook-audit #17073 reconstruit (`99adb22edff5`, :50) ; ledger re-dérivé 442/749 le 14/10.
       Ouvert : qui audite `Compression/` (non assigné).
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
@@ -104,10 +105,18 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
 - [x] Header `X-Claudish-Machine: myia-ai-01` (15/10 ~11:00Z) : `CLAUDISH_MACHINE` dans les deux `.env.secrets`,
       `restore-config.sh` le pose en `custom_providers[].extra_headers` (persiste au boot), inséré à chaud dans
       `config.yaml` (le cache de config suit la signature du fichier : pas de redémarrage). Résolu pour la route
-      principale `http://192.168.0.50:3000` ; PAS pour la forme `/v1` (appels auxiliaires). Confirmation côté hub
-      demandée à po-2025:claudish (lignes `[Request] … machine=myia-ai-01`).
-- [ ] Alias `claude-sonnet-5-5` (cascade de repli) — après la réponse claudish sur l'abort ping-intercom du 15/10
-      08:59Z : passer sur un alias à cascade avant de savoir quel modèle a produit cet abort serait à l'aveugle.
+      principale `http://192.168.0.50:3000` ; PAS pour la forme `/v1` (appels auxiliaires). Confirmé côté hub par
+      ai-01:claudish (15/10 11:25Z) : 61/73 requêtes du bot portent `machine=myia-ai-01`, les 12 autres = un seul fil
+      ouvert avant la pose ; aucune non attribuée après 11:16:57Z. Les appels auxiliaires (compression `glm-4.5-air`,
+      provider `zai` → `GLM_BASE_URL` = hub `/v1`, clé = `CLAUDISH_PROXY_KEY`) restent SANS en-tête — rares (seuil
+      202 752 tokens) ; 1 échec de compression 15/10 09:57Z (résumé tronqué `finish_reason=length`), non bloquant.
+- [x] Alias `claude-sonnet-5-5` — ABANDONNÉ le 15/10 13:5xZ, on reste sur `claude-sonnet-4-6`. Réponse claudish
+      (11:25Z) : l'abort 08:59Z venait de `deepseek-flash`, étape de cascade du rôle sonnet entier (GLM 402/429,
+      Kimi 403 entre 08:24 et 09:19Z ; 0 réponse glm-5.3 sur 2 215 dans cette fenêtre). Les deux alias portent le
+      mot-clé `sonnet` → même rôle, même cascade (SUPPOSÉ d'après `roleFromModelName()` ; la `modelMap` du hub fait
+      foi). Changer de nom n'apporte rien de mesuré. « Ce siège ne cascade pas » est FAUX : il cascade quand GLM tombe,
+      et les étapes de repli forment moins bien les appels d'outils (24 outils) → les aborts de ce siège suivront
+      les fenêtres de cascade du hub. À la prochaine rafale d'aborts : croiser avec les `[Failover]` du hub.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup. Faible enjeu : ce fichier
       ne sert qu'à amorcer `.env` sur un volume NEUF (l'image en a 554 lignes CRLF ; le volume actuel n'est pas touché).
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
