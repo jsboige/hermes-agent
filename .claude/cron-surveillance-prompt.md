@@ -76,9 +76,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
       `Hermes-CronOutput-Watchdog` enregistré le 14/10 19:34Z (non élevé, :11/:41 ; sans token Telegram il ne fait que
-      journaliser dans `roosync-cluster/logs/`). Watchdog review corrigé + `-DryRun` (d7304f3aee, 14/10 22:34Z :
-      marqueur `[Hermes` + recherche `reviewed-by`) ; reste à l'enregistrer — il n'a ni XML ni script `register-*`
-      (calquer ceux du cron-output). Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
+      journaliser dans `roosync-cluster/logs/`). `Hermes-Review-Watchdog` enregistré le 15/10 02:00Z (:07/:37,
+      `register-host-watchdog.ps1 -Watchdog review`) ; il lit les reviews du bot en UN appel GraphQL (contributions,
+      plus récentes d'abord) — tout échantillonnage par PR s'est aveuglé sur CoursIA. Vérifier à chaque fire :
+      `review-watchdog.log` OK avec un âge cohérent avec le dernier `[STATUS Hermes pr-review]`, et
+      `Get-ScheduledTaskInfo Hermes-*` LastTaskResult 0x0. Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
       `Add-Content` direct sur `global.md` (l.238), qui contourne la moitié PG du dashboard v3 ; à repasser par le
       MCP/CLI RooSync d'abord.
 - [ ] Backup volume (`hermes-backup.ps1` remappé) — snapshot AVANT tout rebuild.

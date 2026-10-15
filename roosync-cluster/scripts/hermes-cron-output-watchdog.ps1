@@ -21,10 +21,9 @@
 
     Two signals (precision + recall):
       THREAD-FAIL  — the body contains the malformed-tool-call marker string.
-      SHORT-OUTPUT — `Response Characters` below MinChars. A real report is
-                     ~400-2000 chars; a run that produced nothing meaningful is
-                     a few dozen. This is the cheapest instrument that would
-                     have caught all 11. A response that is exactly `[SILENT]`
+      SHORT-OUTPUT — `Response Characters` below MinChars. The shortest real
+                     report measured is 152 chars; a run that produced nothing
+                     meaningful is a few dozen. A response that is exactly `[SILENT]`
                      (an idle cycle, e.g. ping-intercom) is exempt.
 
     IMPORTANT — THREAD-FAIL does NOT mean the run's work was lost. The abort can
@@ -64,9 +63,10 @@ param(
     # Hermes home on the host volume (persists across rebuilds).
     [string]$HermesHome = "$env:USERPROFILE\.hermes",
     # A run whose response is shorter than this produced nothing meaningful.
-    # 200, not 300: the pr-review prompt asks for 1-3 lines, and a real 3-review
-    # report measured 285 chars on ai-01 (14/10). The known abort body is 181.
-    [int]$MinChars = 200,
+    # Length cannot separate a terse report from the known abort: a real pr-review
+    # report measured 152 chars on ai-01 (15/10), the abort body is 181. THREAD-FAIL
+    # catches the abort by its marker; this floor only catches near-empty runs.
+    [int]$MinChars = 100,
     # Only inspect reports modified this recently.
     [double]$LookbackHours = 26.0,
     # At most one aggregated Telegram alert per cooldown window.
@@ -129,7 +129,9 @@ function Set-State {
 function Send-Telegram {
     param([string]$Text)
     $token = Get-EnvValue "TELEGRAM_BOT_TOKEN"
-    if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN"; return $false }
+    # Write-Log emits on the success stream: inside this function it must go to the
+    # host, or the caller receives @(logline, $false) - a truthy array - as "sent".
+    if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN" | Out-Host; return $false }
     try {
         $body = @{ chat_id = $ReviewChatId; text = $Text; disable_web_page_preview = $true } | ConvertTo-Json
         # PS 5.1 re-encodes a string body to ANSI (cp1252) on send, which breaks
@@ -141,7 +143,7 @@ function Send-Telegram {
         return $true
     }
     catch {
-        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN"
+        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN" | Out-Host
         return $false
     }
 }
@@ -235,6 +237,7 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
 
 $totalFailures = [int]$state.FailureCount + $failures.Count
 $cooldownOk = $false
+$sent = $false
 
 if ($failures.Count -eq 0) {
     Write-Log "OK - no new cron output failure in the last ${LookbackHours}h (cumulative seen: $totalFailures)." "INFO"
@@ -274,7 +277,7 @@ else {
     }
     elseif ($cooldownOk) {
         $sent = Send-Telegram $msg
-        Write-Log "Alert sent to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
+        Write-Log "Alert to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
     }
     else {
         Write-Log "Alert suppressed (cooldown ${CooldownHours}h not elapsed since last alert)." "INFO"
@@ -298,7 +301,8 @@ if ($newSeen.Count -gt $MaxSeen) { $newSeen = $newSeen[($newSeen.Count - $MaxSee
 
 Set-State ([pscustomobject]@{
     LastRun       = $now.ToString("o", $Invariant)
-    LastAlert     = if ($failures.Count -gt 0 -and $cooldownOk -and -not $Seed) { $now.ToString("o", $Invariant) } else { $state.LastAlert }
+    # Only a DELIVERED alert starts the cooldown (same rule as the review watchdog).
+    LastAlert     = if ($sent -eq $true) { $now.ToString("o", $Invariant) } else { $state.LastAlert }
     SeenFiles     = $newSeen
     FailureCount  = $totalFailures
 })

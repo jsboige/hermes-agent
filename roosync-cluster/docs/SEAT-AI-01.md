@@ -103,7 +103,7 @@ the nanoclaw seat watches for it to revert the NanoClaw review cadence `0,15,30,
    `inject_self_check_job.py` (idempotent). The job is po-2026-worded — adapt the seat name in the
    prompt before injecting.
 2. **Watchdogs** (`hermes-mcp-watchdog.ps1`, `hermes-review-watchdog.ps1`,
-   `hermes-cron-output-watchdog.ps1` + `register-cron-output-watchdog.ps1`): po-2026 paths and
+   `hermes-cron-output-watchdog.ps1`, registered with `register-host-watchdog.ps1`): po-2026 paths and
    expectations — review each before registering on ai-01 (paths `C:\Users\jsboi\…` need
    remapping to `C:\Users\MYIA\…`). Check for collisions with existing ai-01 scheduled tasks
    (`NanoClaw-Watchdog`, `MCP-Chain-Watchdog`).
