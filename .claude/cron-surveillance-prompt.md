@@ -91,7 +91,13 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       il cite ses sources (« NanoClaw tient les 4 créneaux, RAPPORTE lane nanoclaw 04:43Z », lanes « mesurées (posts
       signés…) VERIFIÉ »). Aux tours suivants, un état étranger sans source ni « prévu, non constaté » = régression.
 - [x] Job notebook-audit #17073 reconstruit (`99adb22edff5`, :50) ; ledger re-dérivé 442/749 le 14/10.
-      Ouvert : qui audite `Compression/` (non assigné).
+      `Compression/` (2 notebooks : `Compression-01-ShannonFano-Prefixe-Python`, `Compression-02-HuffmanCanonique-Python` ;
+      `Compression_lean/` sans `.ipynb`) est dans `meta.unassigned` du ledger, et le prompt du job dit « NON-ASSIGNÉ : ne
+      pas auditer ». L'annexe de #17073 laisse les bots échanger la partition librement. `[PROPOSAL]` posté chez NanoClaw
+      le 15/10 ~23:00Z (messageId `hermes-seat-compression-partition-20261015`) : Hermes les prend. **Au premier fire
+      après 02:25Z sans objection signée NanoClaw** : ajouter `Compression` à la partition Hermes dans le prompt du job
+      `99adb22edff5` (ligne « Autre dossier (ex. `Compression/`) = NON-ASSIGNÉ ») ; la garde de population postera le
+      drift sur #17073.
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
@@ -129,11 +135,17 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       collés par l'amont (74–95 tokens modèle pour 2,8–4,3 k car. reçus ; le bot n'exécutait aucun `web_search`).
       À chaque fire : pr-review revenu à des rapports normaux ? Retirer le bloc dès que claudish corrige ou explique
       le mécanisme (ASK 16:56Z + INFO 20:0xZ sur son dashboard). Détail : runbook, « Live-config mitigations ».
+      Fire 22:53Z : la parade tient — 14 runs du bot depuis 19:53Z, 0 échec (4 pr-review, 24 reviews), 0 `web_search`.
+      Pas de réponse claudish à ce stade.
 - [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
       messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
       `myia-ai-01:hermes-agent`. Rien à faire côté bot tant que rien n'arrive.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup. Faible enjeu : ce fichier
       ne sert qu'à amorcer `.env` sur un volume NEUF (l'image en a 554 lignes CRLF ; le volume actuel n'est pas touché).
+      Revérifié 15/10 23:00Z : arbre et index en LF (`git ls-files --eol` → `i/lf w/lf`), image en CRLF → le rebuild
+      corrigerait bien. Mesurer les fins de ligne en Python (`b.count(b'\r\n')`) : sous Git Bash, `grep -c $'\r'` compte
+      TOUTES les lignes. Aucun autre changement de code depuis le build (seuls `.gitattributes`/`.gitignore`) : à faire
+      dans une fenêtre creuse de jour, pas de nuit pour ce seul motif.
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
 
 ## Post (OBLIGATOIRE, fin de session)
