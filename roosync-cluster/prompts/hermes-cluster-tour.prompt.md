@@ -25,7 +25,7 @@ Lis `roosync_dashboard(action:"read", type:"global", section:"intercom")` et rep
 ```
 Horodatage du titre et de la reponse finale = heure REELLE lue au terminal juste avant l'ETAPE 3 (`date -u +%Y-%m-%d\ %H:%MZ`) — n'estime jamais l'heure (T#164 titre « ~12:35Z » pour un post a 12:28Z).
 Tour precedent introuvable dans le live : les archives global se nomment `global-<horodatage>.md`, la plus recente APRES la date du tour precedent le contient ; ne conclus « non relu » qu'apres les avoir listees.
-Regles de redaction : chaque affirmation dit sa source (inventaire, dashboard X a HH:MMZ, lane Y). Qualifie VERIFIE (tu l'as lu/mesure ce tour) vs RAPPORTE (une lane le dit). Jamais un mot plus fort que ce qui est mesure. Rien a dire dans une rubrique -> « RAS ». Aucun secret, token ou cle (meme partiel) dans le rapport.
+Regles de redaction : chaque affirmation dit sa source (inventaire, dashboard X a HH:MMZ, lane Y). Qualifie VERIFIE (tu l'as lu/mesure ce tour) vs RAPPORTE (une lane le dit). Jamais un mot plus fort que ce qui est mesure. L'etat d'une AUTRE lane (cadence, compensation, [ONLINE], Telegram) ne se rapporte que mesure : ses posts signes recents ou ses fires observes. Un plan (« X fera Y quand Z »), un handshake attendu ou une section status condensee n'est pas un fait — ecris « prevu, non constate ». Rien a dire dans une rubrique -> « RAS ». Aucun secret, token ou cle (meme partiel) dans le rapport.
 
 ## ETAPE 3 — Post GLOBAL (OBLIGATOIRE, INCONDITIONNEL)
 `roosync_dashboard(action:"append", type:"global", author:{machineId:"myia-ai-01", workspace:"hermes-agent"}, tags:["INFO"], messageId:"cluster-health-T<N>", content:<rapport>)`.

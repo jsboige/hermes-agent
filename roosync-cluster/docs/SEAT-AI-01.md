@@ -85,14 +85,16 @@ bootstrap prompts automatically — anchors are in place).
 
 | Job | Schedule | Notes |
 |-----|----------|-------|
-| `hermes-pr-review` | `5,35 * * * *` | slots :00/:30 (recovery-doc offset :05/:35); NanoClaw holds :15/:45 after revert |
+| `hermes-pr-review` | `5,35 * * * *` | slots :00/:30 (recovery-doc offset :05/:35); NanoClaw's slots are NanoClaw's call — read them from its signed posts |
 | `hermes-cluster-tour` | `13 */12 * * *` | posts `[CLUSTER-HEALTH] T#N` on global every fire (po-2026 cadence and format, numbering continued from T#163; prompt source `roosync-cluster/prompts/hermes-cluster-tour.prompt.md`) |
 | `hermes-morning-brief` | `0 8 * * *` | 5-line bilan on Telegram |
 | `ping-intercom` | every 30 min | light coordination check, SILENT on RAS |
 
-**On first online tour, Hermes must post [ONLINE] on the global dashboard** (its SOUL says so) —
-the nanoclaw seat watches for it to revert the NanoClaw review cadence `0,15,30,45` → `15,45`
-(compensation in place since 2026-10-10; one-shot check armed 2026-10-15 09:41).
+**[ONLINE]** was posted on global by the seat (2026-10-14 11:37Z, then 17:02Z for the review lane
+only). NanoClaw keeps reviewing on all 4 slots (`0,15,30,45`, compensation since 2026-10-10) until it
+decides to revert to `15,45`; its gate also waits for Hermes Telegram. On 2026-10-15 the tour reported
+that revert as done from the plan alone (T#165) — the tour prompt now says another lane's state is
+reported only as measured (its signed posts or observed fires).
 
 ## Phase 2 (after validation — NOT for first boot)
 

@@ -73,7 +73,10 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       livré sur Telegram avant même de lancer l'agent — `Status: BLOCKED (configuration)`).
 - [x] Jobs bot repris un par un après validation : pr-review, ping-intercom, cluster-tour (14/10). Reste morning-brief
       (Telegram seul : inutile tant que la livraison est `local`).
-- [x] `[ONLINE]` sur global (14/10 11:37Z) → NanoClaw a levé sa compensation à 12:19Z (:15/:45).
+- [x] `[ONLINE]` sur global (14/10 11:37Z, puis 17:02Z volet review seul). La cadence NanoClaw est SA décision :
+      le 15/10 elle tenait encore les 4 créneaux (fires :03/:17/:31/:47 mesurés par NanoClaw 22:00→04:35Z) et son
+      revert attend aussi Telegram. N'écrire « NanoClaw reverté » que sur un post signé NanoClaw qui le dit
+      (T#165 l'a affirmé à tort, d'après un plan — règle ajoutée au prompt du tour le 15/10).
 - [x] Job notebook-audit #17073 reconstruit (`99adb22edff5`, :50) ; ledger re-dérivé 442/749 le 14/10.
       Ouvert : qui audite `Compression/` (non assigné).
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
