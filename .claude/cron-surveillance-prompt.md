@@ -164,4 +164,6 @@ Il doit toujours y avoir **exactement 1** job de surveillance.
 
 ## Fin de session
 
-Restituer en bloc les questions ouvertes du registre user (`memory/user-question-registry.md`).
+Restituer en bloc les questions ouvertes du registre user (`memory/user-question-registry.md`), dans le message
+final ET en UNE entrée `[ASK-USER]` sur le dashboard `global` (vue consolidée du registre, ouvertes seulement,
+format simple ; zéro ouverte = pas d'entrée — règle globale #4196).
