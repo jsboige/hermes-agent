@@ -135,3 +135,12 @@ reported only as measured (its signed posts or observed fires).
 - **Full review-skill edition** — lived in po-2026 `~/skills/github/myia-cluster-pr-review/`. The
   bootstrap prompt embeds the reduced edition v1.2.0 (from roo-extensions, 2026-10-06).
 - **jsboigeEpita coverage** — skipped on this seat (reduced-edition protocol; token gap).
+
+## Live-config mitigations (volume `config.yaml`, not in the repo)
+
+- **`agent.disabled_toolsets: [search]`** (2026-10-15 20:03Z): removes `web_search` from every cron run and keeps
+  `web_extract`. It was applied because 5 pr-review runs in a row (17:46→19:38Z) ended on raw web-search hits with no
+  report. In each of them the bot never ran `web_search`, and the hub's last turn carried 74–95 model tokens but
+  2.8–4.3 k chars, so the search text was added outside the model's output (hub interception is SUPPOSED; asked
+  ai-01:claudish). Backup: `config.yaml.bak-20261015T2003Z`. `restore-config.sh` never touches `agent:`, so it
+  survives a reboot. **Remove the block once claudish fixes or explains the mechanism.**

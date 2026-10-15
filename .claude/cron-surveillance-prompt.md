@@ -124,6 +124,14 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       foi). Changer de nom n'apporte rien de mesuré. « Ce siège ne cascade pas » est FAUX : il cascade quand GLM tombe,
       et les étapes de repli forment moins bien les appels d'outils (24 outils) → les aborts de ce siège suivront
       les fenêtres de cascade du hub. À la prochaine rafale d'aborts : croiser avec les `[Failover]` du hub.
+- [ ] **Parade `web_search`** (15/10 20:03Z, `agent.disabled_toolsets: [search]` dans le `config.yaml` du volume,
+      sauvegarde `config.yaml.bak-20261015T2003Z`) : 5 pr-review de suite finissaient sur des résultats de recherche
+      collés par l'amont (74–95 tokens modèle pour 2,8–4,3 k car. reçus ; le bot n'exécutait aucun `web_search`).
+      À chaque fire : pr-review revenu à des rapports normaux ? Retirer le bloc dès que claudish corrige ou explique
+      le mécanisme (ASK 16:56Z + INFO 20:0xZ sur son dashboard). Détail : runbook, « Live-config mitigations ».
+- [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
+      messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
+      `myia-ai-01:hermes-agent`. Rien à faire côté bot tant que rien n'arrive.
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup. Faible enjeu : ce fichier
       ne sert qu'à amorcer `.env` sur un volume NEUF (l'image en a 554 lignes CRLF ; le volume actuel n'est pas touché).
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
@@ -166,4 +174,5 @@ Il doit toujours y avoir **exactement 1** job de surveillance.
 
 Restituer en bloc les questions ouvertes du registre user (`memory/user-question-registry.md`), dans le message
 final ET en UNE entrée `[ASK-USER]` sur le dashboard `global` (vue consolidée du registre, ouvertes seulement,
-format simple ; zéro ouverte = pas d'entrée — règle globale #4196).
+format simple ; zéro ouverte = pas d'entrée — règle globale #4196). Une fois par jour suffit si le registre n'a
+pas bougé depuis l'entrée précédente (les fires de 3 h sont des cycles d'une même session).
