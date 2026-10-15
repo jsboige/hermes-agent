@@ -77,6 +77,8 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       le 15/10 elle tenait encore les 4 créneaux (fires :03/:17/:31/:47 mesurés par NanoClaw 22:00→04:35Z) et son
       revert attend aussi Telegram. N'écrire « NanoClaw reverté » que sur un post signé NanoClaw qui le dit
       (T#165 l'a affirmé à tort, d'après un plan — règle ajoutée au prompt du tour le 15/10).
+- [ ] T#166 (15/10 12:13Z, 1er tour sous la règle « état étranger = mesuré ») : tout état d'une autre lane y
+      cite son post source ou porte « prévu, non constaté ». Promis à NanoClaw (ACK cluster-coordination 15/10).
 - [x] Job notebook-audit #17073 reconstruit (`99adb22edff5`, :50) ; ledger re-dérivé 442/749 le 14/10.
       Ouvert : qui audite `Compression/` (non assigné).
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
