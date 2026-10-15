@@ -92,10 +92,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `Get-ScheduledTaskInfo Hermes-*` LastTaskResult 0x0. Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
       `Add-Content` direct sur `global.md` (l.238), qui contourne la moitié PG du dashboard v3 ; à repasser par le
       MCP/CLI RooSync d'abord.
-- [ ] Backup volume — snapshot AVANT tout rebuild. Script remappé + `-DryRun` le 15/10 (dry-run OK : volume
-      `C:\Users\MYIA\.hermes`, image `alpine:3.19` locale, 0 rotation). Reste le vrai run : il ARRÊTE le bot,
-      donc seulement quand aucun job n'est en vol (`dispatched_at` ≤ `last_run_at` partout dans `jobs.json`).
-      Le 15/10 04:48Z, pr-review + ping-intercom tournaient : reporté.
+- [x] Backup volume — 1er snapshot réel le 15/10 07:30Z : `C:\Users\MYIA\hermes-backups\hermes-20261015-073019Z.tar.gz`
+      (546 Mo, gzip OK, 23 912 entrées dont state.db/config/SOUL/jobs/gh, sha256[:16] `0553dd73a0f6cdbf`), arrêt bot 148 s,
+      teardown propre (0 job en vol, SessionDB fermée). Le ledger du gateway marque quand même la vie précédente
+      « UNCLEANLY » : faux signal, le log montre le teardown complet. Fenêtre trouvée par attente active : fin d'un
+      pr-review (07:30:08Z) → prochain fire 07:35Z. Refaire un snapshot avant chaque rebuild (`hermes-backup.ps1`).
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup.
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
 

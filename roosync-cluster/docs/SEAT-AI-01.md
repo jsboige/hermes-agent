@@ -112,9 +112,9 @@ reported only as measured (its signed posts or observed fires).
 3. **Backup**: `hermes-backup.ps1` follows `%USERPROFILE%` (remapped 15/10), uses the local
    `alpine:3.19`, always restarts the container (`try/finally`) and has `-DryRun`. It STOPS the bot:
    run it when no job is in flight (`last_dispatch.dispatched_at` ≤ `last_run_at` for every enabled
-   job in `cron/jobs.json`) — pr-review runs 10-30 min every 30 min, so the gaps are short. Until the
-   first real run, the volume is un-snapshotted (incident precedent 2026-05-14 — snapshot BEFORE any
-   rebuild).
+   job in `cron/jobs.json`) — pr-review runs 10-30 min every 30 min, so the gaps are short. First real
+   run 2026-10-15 07:30Z (546 MB, 148 s of downtime, taken between the end of a pr-review run and the
+   next :35 fire). Snapshot again BEFORE any rebuild (incident precedent 2026-05-14).
 
 ## Failover switch (when po-2026 returns)
 
