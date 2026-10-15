@@ -157,23 +157,31 @@ awk '
 # (/v1/messages -> 200; /anthropic/v1/messages -> 404), which the validator
 # rejects. A custom_providers entry carries base_url + transport explicitly and
 # bypasses the native-endpoint validator. Incident 2026-10-07.
+# CLAUDISH_MACHINE (per seat, in .env.secrets) becomes the X-Claudish-Machine header
+# the hub tags each request with. Without it the hub infers the lane from the key,
+# and the ai-01 seat's requests were logged as myia-po-2026 (2026-10-15).
 echo "  -> Pointing main model at claudish hub (custom provider)"
 python3 - "$DATA/config.yaml" << 'PYEOF'
-import sys
+import os, sys
 from ruamel.yaml import YAML
 p = sys.argv[1]
 y = YAML(typ="rt")
 d = y.load(open(p))
 d.setdefault("model", {})["provider"] = "claudish"
 d.pop("custom_providers", None)
-d["custom_providers"] = [{
+entry = {
     "name": "claudish",
     "base_url": "http://192.168.0.50:3000",
     "api_mode": "anthropic_messages",
     "key_env": "ANTHROPIC_TOKEN",
-}]
+}
+machine = os.environ.get("CLAUDISH_MACHINE", "").strip()
+if machine:
+    entry["extra_headers"] = {"X-Claudish-Machine": machine}
+d["custom_providers"] = [entry]
 y.dump(d, open(p, "w"))
-print("     model.provider=claudish + custom_providers entry")
+print("     model.provider=claudish + custom_providers entry"
+      + (f" (X-Claudish-Machine: {machine})" if machine else " (no CLAUDISH_MACHINE: hub infers the lane)"))
 PYEOF
 
 # Require secrets — NO hardcoded fallbacks

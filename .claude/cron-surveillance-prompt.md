@@ -32,6 +32,10 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 1. **Conteneur** : `docker ps --filter name=hermes --format "{{.Names}} {{.Status}} {{.Image}}"` +
    `docker inspect hermes --format "{{.RestartCount}} restarts, started {{.State.StartedAt}}"`.
    Image attendue `hermes-agent:ai-01`. Red flag : RestartCount > 3 ou pas « Up ».
+   Le boot rejoue `C:\Users\MYIA\.hermes\restore-config.sh` (copie volume) : elle doit être identique à
+   `roosync-cluster/scripts/hermes-restore-config.sh` (`cmp` après `tr -d '\r'`). Le 15/10 elle avait un jour de
+   retard (sans le correctif du login gh stocké `76da7974f1`) — inoffensif tant que le volume garde son
+   `hosts.yml`, mais un volume neuf aurait perdu l'identité GitHub du bot.
 2. **Gateway vivant** : `docker exec hermes ps -eo pid,user,args | grep -E "^ *[0-9]+ hermes .*sys.argv\[0\]='hermes'"`
    (le gateway est un python avec `argv[0]='hermes'` ; `pgrep -f "gateway run"` ne vise que le wrapper s6
    root). NE PAS afficher la sortie brute de `ps` : les args `mcp-remote` portent le bearer MCP.
@@ -97,7 +101,15 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       teardown propre (0 job en vol, SessionDB fermée). Le ledger du gateway marque quand même la vie précédente
       « UNCLEANLY » : faux signal, le log montre le teardown complet. Fenêtre trouvée par attente active : fin d'un
       pr-review (07:30:08Z) → prochain fire 07:35Z. Refaire un snapshot avant chaque rebuild (`hermes-backup.ps1`).
-- [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup.
+- [x] Header `X-Claudish-Machine: myia-ai-01` (15/10 ~11:00Z) : `CLAUDISH_MACHINE` dans les deux `.env.secrets`,
+      `restore-config.sh` le pose en `custom_providers[].extra_headers` (persiste au boot), inséré à chaud dans
+      `config.yaml` (le cache de config suit la signature du fichier : pas de redémarrage). Résolu pour la route
+      principale `http://192.168.0.50:3000` ; PAS pour la forme `/v1` (appels auxiliaires). Confirmation côté hub
+      demandée à po-2025:claudish (lignes `[Request] … machine=myia-ai-01`).
+- [ ] Alias `claude-sonnet-5-5` (cascade de repli) — après la réponse claudish sur l'abort ping-intercom du 15/10
+      08:59Z : passer sur un alias à cascade avant de savoir quel modèle a produit cet abort serait à l'aveugle.
+- [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup. Faible enjeu : ce fichier
+      ne sert qu'à amorcer `.env` sur un volume NEUF (l'image en a 554 lignes CRLF ; le volume actuel n'est pas touché).
 - [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
 
 ## Post (OBLIGATOIRE, fin de session)
