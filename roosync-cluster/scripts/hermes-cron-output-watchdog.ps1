@@ -19,12 +19,21 @@
     `<hermes home>/cron/output/<job-id>/<timestamp>.md`, which carry both the
     run's `Response Characters` count and its full response body.
 
-    Two signals (precision + recall):
+    Four signals (precision + recall):
       THREAD-FAIL  — the body contains the malformed-tool-call marker string.
       SHORT-OUTPUT — `Response Characters` below MinChars. The shortest real
                      report measured is 152 chars; a run that produced nothing
                      meaningful is a few dozen. A response that is exactly `[SILENT]`
                      (an idle cycle, e.g. ping-intercom) is exempt.
+      SEARCH-DUMP  — the final response ends in raw web-search results (numbered
+                     bold titles, each followed by an indented non-GitHub URL):
+                     the turn stopped right after a search, with no report.
+                     Recorded `ok`. First seen 2026-10-15 12:34Z on ai-01, 4
+                     pr-review runs that day, none of which posted its STATUS.
+      RUN-ERROR    — the report carries the scheduler's `## Error` section with a
+                     traceback (hub IndexError, repetition loop, content filter).
+                     It has no `Response Characters` line, so neither signal
+                     above could ever see it.
 
     IMPORTANT — THREAD-FAIL does NOT mean the run's work was lost. The abort can
     land anywhere in the run, and the two measured cases differ:
@@ -92,6 +101,12 @@ $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
 # Exact marker the framework prints when the model emits an unusable tool call.
 $ThreadFailMarker = 'missing required parameters: calls'
+# Scheduler error section: the heading, then a Python traceback.
+$RunErrorPattern = '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)'
+# One raw search hit: "N. **title**" then an indented URL. GitHub URLs are excluded
+# so a real report listing PR links on their own line cannot match.
+$SearchHitPattern = '(?m)^\d+\. \*\*.+\*\*[ \t]*\r?\n[ \t]+https?://(?!github\.com)\S+'
+$SearchDumpMinHits = 3
 
 # --- helpers ---
 
@@ -205,8 +220,17 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
         if ($null -eq $body) { continue }
 
         $reason = $null
+        # Only the response is searched for hits: the report also embeds the job's prompt.
+        $respAt = $body.IndexOf('## Response')
+        $response = if ($respAt -ge 0) { $body.Substring($respAt) } else { '' }
         if ($body -match [regex]::Escape($ThreadFailMarker)) {
             $reason = "THREAD-FAIL"
+        }
+        elseif ($body -match $RunErrorPattern) {
+            $reason = "RUN-ERROR"
+        }
+        elseif ([regex]::Matches($response, $SearchHitPattern).Count -ge $SearchDumpMinHits) {
+            $reason = "SEARCH-DUMP"
         }
         else {
             # "**Response Characters:** 181"
@@ -244,19 +268,28 @@ if ($failures.Count -eq 0) {
 }
 else {
     $byLane = ($failures | Group-Object Job | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ", "
-    Write-Log "DETECTED $($failures.Count) new silent failure(s): $byLane (cumulative: $totalFailures)." "ERROR"
+    Write-Log "DETECTED $($failures.Count) new failure(s): $byLane (cumulative: $totalFailures)." "ERROR"
 
     # Built unconditionally: the dry run must be able to show exactly what
     # would have been sent.
     $lines = $failures | Sort-Object When | ForEach-Object {
         "  - $($_.Job) @ $($_.When.ToString('MM-dd HH:mm', $Invariant))Z [$($_.Reason)]"
     }
+    $reasons = @($failures | ForEach-Object { $_.Reason } | Sort-Object -Unique)
+    $legend = @{
+        'THREAD-FAIL'  = "THREAD-FAIL (recorded ok): a malformed tool call from the hub-served model became the run's final response."
+        'SHORT-OUTPUT' = "SHORT-OUTPUT (recorded ok): the run produced almost nothing."
+        'SEARCH-DUMP'  = "SEARCH-DUMP (recorded ok): the run ended on raw web-search results instead of its report."
+        'RUN-ERROR'    = "RUN-ERROR: the scheduler logged a traceback (see the report's Error section)."
+    }
     $msg = @(
-        "[CRON-OUTPUT-WATCHDOG] $($failures.Count) cron run(s) FAILED SILENTLY",
+        "[CRON-OUTPUT-WATCHDOG] $($failures.Count) cron run(s) FAILED",
         "",
         ($lines -join "`n"),
         "",
-        "$totalFailures cumulative. These runs are recorded status=ok: each aborted on a malformed tool call from the hub-served model (192.168.0.50:3000) and that error text became the run's final response. An abort does NOT always mean lost work - a run that posted before aborting cost nothing. Read <hermes home>/cron/output/<job-id>/ to tell which case it was."
+        (($reasons | ForEach-Object { $legend[$_] }) -join "`n"),
+        "",
+        "$totalFailures cumulative. A failed run does NOT always mean lost work - a run that posted before failing cost nothing. Read <hermes home>/cron/output/<job-id>/ to tell which case it was."
     ) -join "`n"
 
     $cooldownOk = $true

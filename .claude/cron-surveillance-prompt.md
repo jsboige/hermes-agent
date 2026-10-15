@@ -43,6 +43,12 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    `C:\Users\MYIA\.hermes\cron\output\<job-id>\*.md`. Pour chaque job actif : dernier run < 2 périodes,
    `Response` non réduite au marqueur `Tool call "tool_call" failed: missing required parameters`
    (échec silencieux enregistré `ok` — corpus = `cron/output/**`, PAS les logs ni les transcripts).
+   Classer TOUS les rapports depuis le fire précédent, pas seulement le dernier de chaque job : deux autres
+   formes d'échec existent depuis le 15/10 — fin sur résultats bruts de recherche web (`N. **titre**` + URL
+   indentée, enregistrée `ok`, aucun bilan ni STATUS) et section `## Error` avec traceback (`IndexError` du hub,
+   boucle de répétition, filtre de contenu). Le watchdog cron-output les signale (`SEARCH-DUMP`, `RUN-ERROR`)
+   depuis le 15/10 ; avant, il en était aveugle (5 échecs sur 14 runs en 3 h, log « OK »). Cause d'une rafale :
+   croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses.
 4. **Reviews postées** (hôte) : les reviews du bot, plus récentes d'abord, tous dépôts, en UN appel :
    `gh api graphql -f query='query { user(login:"clusterManager-Myia") { contributionsCollection { pullRequestReviewContributions(first: 100, orderBy:{direction: DESC}) { nodes { pullRequestReview { submittedAt state body commit { oid } } pullRequest { number repository { nameWithOwner } } } } } } }'`
    Instrument versionné : `python roosync-cluster/scripts/check-review-bodies.py <ISO du fire précédent>`
@@ -94,7 +100,8 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `register-host-watchdog.ps1 -Watchdog review`) ; il lit les reviews du bot en UN appel GraphQL (contributions,
       plus récentes d'abord) — tout échantillonnage par PR s'est aveuglé sur CoursIA. Vérifier à chaque fire :
       `review-watchdog.log` OK avec un âge cohérent avec le dernier `[STATUS Hermes pr-review]`, et
-      `Get-ScheduledTaskInfo Hermes-*` LastTaskResult 0x0. Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
+      `Get-ScheduledTaskInfo Hermes-*` LastTaskResult 0x0. 15/10 : cron-output étendu à `SEARCH-DUMP` et
+      `RUN-ERROR` (dry-run PS 5.1 : 7 runs relevés, exactement les 7 manqués du jour, 0 faux positif sur 26 h). Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
       `Add-Content` direct sur `global.md` (l.238), qui contourne la moitié PG du dashboard v3 ; à repasser par le
       MCP/CLI RooSync d'abord.
 - [x] Backup volume — 1er snapshot réel le 15/10 07:30Z : `C:\Users\MYIA\hermes-backups\hermes-20261015-073019Z.tar.gz`
