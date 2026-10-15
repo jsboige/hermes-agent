@@ -39,13 +39,17 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    `C:\Users\MYIA\.hermes\cron\output\<job-id>\*.md`. Pour chaque job actif : dernier run < 2 périodes,
    `Response` non réduite au marqueur `Tool call "tool_call" failed: missing required parameters`
    (échec silencieux enregistré `ok` — corpus = `cron/output/**`, PAS les logs ni les transcripts).
-4. **Reviews postées** (hôte) :
-   `gh api -X GET search/issues -f q="reviewed-by:clusterManager-Myia is:pr" -f sort=updated -f order=desc --jq ".items[:5] | .[] | {n:.number, repo:.repository_url, updated:.updated_at}"`
-   puis vérifier qu'au moins une review récente porte le marqueur `[Hermes` (NanoClaw poste sous le même
-   compte avec `[NanoClaw`). PIÈGE : `-X GET` obligatoire (sinon POST → 404).
-   Sur les reviews `[Hermes` de la fenêtre : 0 doublon au même `commit_id`, et aucun corps < 200 car. ni
-   littéral `@/…` / `@fichier.md` (le 14/10, #20702 a reçu un corps `@/tmp/review_20702.md` de 21 car. :
-   un contrôle des seuls doublons ne le voit pas).
+4. **Reviews postées** (hôte) : les reviews du bot, plus récentes d'abord, tous dépôts, en UN appel :
+   `gh api graphql -f query='query { user(login:"clusterManager-Myia") { contributionsCollection { pullRequestReviewContributions(first: 100, orderBy:{direction: DESC}) { nodes { pullRequestReview { submittedAt state body commit { oid } } pullRequest { number repository { nameWithOwner } } } } } } }'`
+   Instrument versionné : `python roosync-cluster/scripts/check-review-bodies.py <ISO du fire précédent>`
+   (exit 1 si doublon, corps court ou littéral ; avertit si la page de 100 ne remonte pas jusqu'au since).
+   NE PAS passer par `search/issues` trié par `updated` : une vague de mises à jour CoursIA (des dizaines de
+   PRs en quelques secondes) chasse les reviews fraîches de la fenêtre. Au moins une review récente doit
+   porter `[Hermes` (NanoClaw poste sous le même compte avec `[NanoClaw`).
+   Sur les reviews `[Hermes` depuis le fire précédent : 0 doublon au même `commit_id`, et aucun corps
+   < 200 car. ni littéral `@/…` / `@fichier.md`. Le 14/10, un seul run (14:40→14:46Z) a posté 4 corps
+   littéraux (#20432, #20656, #20634, #20602 — reposts 15/10 04:43Z) ; un contrôle des seuls doublons ne les
+   voit pas, et un contrôle commencé après le run non plus.
    **Identité du bot** : `docker exec -u hermes hermes sh -c 'env -u GH_TOKEN HOME=/opt/data gh api user --jq .login'`
    doit répondre `clusterManager-Myia`, et `grep -rl GH_TOKEN_JSBOIGE /c/Users/MYIA/.hermes/skills /c/Users/MYIA/.hermes/memories`
    ne doit lister que des interdictions. Le bot écrit ses propres skills : le 14/10, il s'en est écrit une qui l'envoyait
