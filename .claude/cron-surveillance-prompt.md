@@ -123,8 +123,12 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `RUN-ERROR` (dry-run PS 5.1 : 7 runs relevés, exactement les 7 manqués du jour, 0 faux positif sur 26 h). Watchdog cluster-tour : **enregistré le 16/10 11:01Z**
       (`Hermes-ClusterTour-Watchdog`, :19/:49, non élevé, dry-run posté avant). Son `[WARN]` passe maintenant par le
       bus (`roosync_dashboard append` en MCP/HTTP, idempotent par tour), plus par `Add-Content` sur `global.md` ; il
-      lit aussi les archives de condensation postérieures au tour. 1er run manuel : `OK` (T#167), 0x0. À vérifier :
-      verdict du tour de 12:13Z dans `cluster-tour-watchdog.log` au tick de 12:49Z.
+      lit aussi les archives de condensation postérieures au tour. 1er run manuel : `OK` (T#167), 0x0. **Fire 13:51Z :
+      bug trouvé** — le tick de 12:19Z (PENDING) marquait le tour comme vérifié, celui de 12:49Z l'a donc sauté (SKIP) :
+      le tour de 12:13Z n'a jamais été contrôlé. Corrigé (seuls OK/MISSING avancent l'état), testé sur sources jetables
+      (PENDING n'avance pas, OK avance), état remis au tour de 00:13Z (sauvegarde `logs/…-state.json.bak-20261016T1400Z`),
+      run réel : `OK` sur le tour de 12:13Z (titre à 12:17:13Z), `OkCount=2`. À chaque fire : le log doit montrer un
+      `OK` ou `MISSING` pour chaque tour (00:13Z, 12:13Z), jamais un PENDING suivi seulement de SKIP.
 - [x] Backup volume — 1er snapshot réel le 15/10 07:30Z : `C:\Users\MYIA\hermes-backups\hermes-20261015-073019Z.tar.gz`
       (546 Mo, gzip OK, 23 912 entrées dont state.db/config/SOUL/jobs/gh, sha256[:16] `0553dd73a0f6cdbf`), arrêt bot 148 s,
       teardown propre (0 job en vol, SessionDB fermée). Le ledger du gateway marque quand même la vie précédente

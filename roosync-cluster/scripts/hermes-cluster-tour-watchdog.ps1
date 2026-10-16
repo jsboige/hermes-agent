@@ -431,8 +431,13 @@ if ($DryRun) {
     Write-Log "DRY-RUN bus route probe (roosync_dashboard list): $(if ($routeOk) { 'OK' } else { 'FAILED' })" $(if ($routeOk) { "INFO" } else { "WARN" })
 }
 
+# A PENDING fire is NOT checked yet: recording it here made the next tick read
+# "no new fire" and SKIP it, so the fire was never asserted (measured 16/10 on
+# ai-01: 12:13Z tour PENDING at 12:19Z, SKIP at 12:49Z). Latent at :07/:37,
+# where the first tick after a :13 fire is already past the window.
+$fireAsserted = $verdict -eq "OK" -or $verdict -eq "MISSING"
 Set-State @{
-    LastCheckedRunAt = if ($isNewFire) { $fireAnchor.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
+    LastCheckedRunAt = if ($fireAsserted) { $fireAnchor.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
     LastAlertAt      = $newAlertAt
     OkCount          = $okCount
     MissingCount     = $missingCount

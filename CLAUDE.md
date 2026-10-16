@@ -390,6 +390,8 @@ Assertion: when a new fire is older than 15 min, a `[CLUSTER-HEALTH]` title must
 
 Deployed on po-2026 at `:07/:37`; on ai-01 since 2026-10-16 as `Hermes-ClusterTour-Watchdog` at `:19/:49` (`register-host-watchdog.ps1 -Watchdog cluster-tour`, template `hermes-cluster-tour-watchdog-task.xml`, non-elevated), so the 12:13Z fire gets its verdict at 12:49Z.
 
+**Gotcha (fixed 2026-10-16) — a PENDING verdict must not mark the fire as checked.** The state recorded `LastCheckedRunAt` for any new fire, PENDING included, so the next tick read "no new fire" and SKIPped it: the fire was never asserted. Latent at `:07/:37` (the first tick after a `:13` fire is already past the 15-min window); exposed on ai-01 at `:19/:49`, where the 12:13Z tour went PENDING at 12:19Z then SKIP at 12:49Z. Only OK/MISSING advance the state now. Any schedule change must be checked against the window: a tick inside it is the case that hid this.
+
 **Gotcha (fixed):** the `[WARN]` body text contains the literal string "[CLUSTER-HEALTH]" ("aucun append [CLUSTER-HEALTH]") — the parser matches the section TITLE (`## [CLUSTER-HEALTH]`) only, otherwise the WARN self-validates as a posted tour.
 
 **Gotcha (fixed #3743, 2026-09-20):** the tour title format has drifted twice (`[CLUSTER-HEALTH] T#72` at T#72, then `[CLUSTER-HEALTH][DONE] T#112` at T#112 when dashboard appends render message tags inline) — after the second drift + a condensation archiving the last old-format block, `last_health` read `never` and EVERY verdict was a false MISSING. The title matcher now tolerates any number of intercalated bracketed tags; treat future title changes as a watchdog compatibility surface.
