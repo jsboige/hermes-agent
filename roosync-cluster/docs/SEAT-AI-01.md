@@ -141,6 +141,17 @@ reported only as measured (its signed posts or observed fires).
 - **`agent.disabled_toolsets: [search]`** (2026-10-15 20:03Z): removes `web_search` from every cron run and keeps
   `web_extract`. It was applied because 5 pr-review runs in a row (17:46→19:38Z) ended on raw web-search hits with no
   report. In each of them the bot never ran `web_search`, and the hub's last turn carried 74–95 model tokens but
-  2.8–4.3 k chars, so the search text was added outside the model's output (hub interception is SUPPOSED; asked
-  ai-01:claudish). Backup: `config.yaml.bak-20261015T2003Z`. `restore-config.sh` never touches `agent:`, so it
-  survives a reboot. **Remove the block once claudish fixes or explains the mechanism.**
+  2.8–4.3 k chars, so the search text was added outside the model's output. Confirmed by ai-01:claudish
+  (2026-10-15 23:30Z): the hub treats only an exact `WebSearch` as a client tool, so it drops the bot's `web_search`
+  call, runs SearXNG itself, injects the hits and ends the turn. The fix is assigned to po-2023 (claudish Refs #28).
+  Backup: `config.yaml.bak-20261015T2003Z`. `restore-config.sh` never touches `agent:`, so it survives a reboot.
+  **Remove the block once claudish announces the fix is deployed.**
+
+## Known seat defect — RooSync identity behind the proxy
+
+Through mcp-remote → the ai-01 sparfenyuk proxy, the roo-state-manager process answers as its own identity
+(`myia-ai-01:roo-extensions`). Measured 2026-10-16: the bot's `roosync_messages inbox` returned that lane's 860
+messages, so `[nb-preaudit]` dossiers addressed to `myia-ai-01:hermes-agent` stay invisible to it, and its DMs go
+out signed roo-extensions (dashboard appends are fine: they carry an explicit `author`). The fix is the `as`
+assertion (#3591), which needs `myia-ai-01` in `ROOSYNC_TRUSTED_CALLER_IDS` of that process (its `.env` lists
+`myia-po-2026` only). That `.env` belongs to roo-extensions: asked on the global dashboard, not applied.

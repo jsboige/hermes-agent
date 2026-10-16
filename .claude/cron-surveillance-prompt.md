@@ -48,7 +48,9 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    indentée, enregistrée `ok`, aucun bilan ni STATUS) et section `## Error` avec traceback (`IndexError` du hub,
    boucle de répétition, filtre de contenu). Le watchdog cron-output les signale (`SEARCH-DUMP`, `RUN-ERROR`)
    depuis le 15/10 ; avant, il en était aveugle (5 échecs sur 14 runs en 3 h, log « OK »). Cause d'une rafale :
-   croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses.
+   croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses. Un `RUN-ERROR`
+   « HTTP 400 … Cannot reach GLM Coding at `https://api.z.ai` » vient du HUB (le bot appelle bien `192.168.0.50:3000`) :
+   le hub n'a pas joint z.ai et répond 400, que le client ne rejoue pas (1er cas 15/10 23:06Z, flap hub 23:08Z).
 4. **Reviews postées** (hôte) : les reviews du bot, plus récentes d'abord, tous dépôts, en UN appel :
    `gh api graphql -f query='query { user(login:"clusterManager-Myia") { contributionsCollection { pullRequestReviewContributions(first: 100, orderBy:{direction: DESC}) { nodes { pullRequestReview { submittedAt state body commit { oid } } pullRequest { number repository { nameWithOwner } } } } } } }'`
    Instrument versionné : `python roosync-cluster/scripts/check-review-bodies.py <ISO du fire précédent>`
@@ -136,10 +138,22 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       À chaque fire : pr-review revenu à des rapports normaux ? Retirer le bloc dès que claudish corrige ou explique
       le mécanisme (ASK 16:56Z + INFO 20:0xZ sur son dashboard). Détail : runbook, « Live-config mitigations ».
       Fire 22:53Z : la parade tient — 14 runs du bot depuis 19:53Z, 0 échec (4 pr-review, 24 reviews), 0 `web_search`.
-      Pas de réponse claudish à ce stade.
+      **Mécanisme confirmé par ai-01:claudish (15/10 23:30Z)** : le hub ne reconnaît comme outil client que `WebSearch`
+      exact ; il supprime donc l'appel `web_search` du bot, exécute SearXNG lui-même, injecte le texte et clôt le tour.
+      Correctif confié à po-2023 (Refs #28 du dépôt claudish). La parade reste « justifiée jusqu'au déploiement » :
+      la retirer quand claudish annonce le déploiement, pas avant (ACK posté 16/10 ~02:05Z).
 - [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
       messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
-      `myia-ai-01:hermes-agent`. Rien à faire côté bot tant que rien n'arrive.
+      `myia-ai-01:hermes-agent`. vllm a re-pointé son livreur (PR vllm#119, 15/10 23:2xZ) ; son probe
+      `nbpre-probe-feb508221221` est bien arrivé dans l'inbox du siège (sha256 vérifié 16/10 ~02:00Z).
+      **Mais le bot ne peut pas le lire** : via mcp-remote → proxy sparfenyuk d'ai-01, le serveur lui sert l'inbox de
+      `myia-ai-01:roo-extensions` (860 messages, mesuré dans son spillover de 00:51Z), et ses DM sortants partent signés
+      roo-extensions. Correctif = `as: "myia-ai-01:hermes-agent"` (#3591), qui exige `myia-ai-01` dans
+      `ROOSYNC_TRUSTED_CALLER_IDS` (`D:\roo-extensions\mcps\internal\servers\roo-state-manager\.env`, aujourd'hui
+      `myia-po-2026` seul) + relance `MCP-Proxy-RSM`. Infra roo-extensions : DEMANDÉ (global 16/10 ~02:00Z, crossPost
+      roo-extensions), pas appliqué. **Sur leur oui** : ajouter `as` aux appels inbox/send des prompts du bot
+      (notebook-audit ÉTAPE 0.6 + C5), puis vérifier au cycle d'audit suivant. Backlog `Image/` : 0 dossier reçu après
+      00:05Z et 01:05Z (signalé à vllm sur le même fil).
 - [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup. Faible enjeu : ce fichier
       ne sert qu'à amorcer `.env` sur un volume NEUF (l'image en a 554 lignes CRLF ; le volume actuel n'est pas touché).
       Revérifié 15/10 23:00Z : arbre et index en LF (`git ls-files --eol` → `i/lf w/lf`), image en CRLF → le rebuild
