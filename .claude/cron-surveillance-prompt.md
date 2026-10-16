@@ -96,10 +96,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `Compression/` (2 notebooks : `Compression-01-ShannonFano-Prefixe-Python`, `Compression-02-HuffmanCanonique-Python` ;
       `Compression_lean/` sans `.ipynb`) est dans `meta.unassigned` du ledger, et le prompt du job dit « NON-ASSIGNÉ : ne
       pas auditer ». L'annexe de #17073 laisse les bots échanger la partition librement. `[PROPOSAL]` posté chez NanoClaw
-      le 15/10 ~23:00Z (messageId `hermes-seat-compression-partition-20261015`) : Hermes les prend. **Au premier fire
-      après 02:25Z sans objection signée NanoClaw** : ajouter `Compression` à la partition Hermes dans le prompt du job
-      `99adb22edff5` (ligne « Autre dossier (ex. `Compression/`) = NON-ASSIGNÉ ») ; la garde de population postera le
-      drift sur #17073.
+      le 15/10 ~23:00Z (messageId `hermes-seat-compression-partition-20261015`) : Hermes les prend. **FAIT 16/10 05:00Z**
+      (NanoClaw sans objection, cycle 04:45Z) : `Compression` ajouté à l'ensemble HERMES du prompt `99adb22edff5`, exemple
+      retiré de la ligne NON-ASSIGNÉ, via `cron.jobs.update_job` dans le conteneur (verrou `jobs.json`), seul `prompt`
+      changé (sauvegarde `cron/jobs.json.bak-20261016T0500Z`). À vérifier au fire suivant : le cycle d'audit publie le
+      drift +2 sur #17073 et `meta.unassigned` se vide.
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
