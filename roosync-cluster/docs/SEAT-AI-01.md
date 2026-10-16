@@ -108,7 +108,10 @@ reported only as measured (its signed posts or observed fires).
    `hermes-cron-output-watchdog.ps1`, registered with `register-host-watchdog.ps1`): po-2026 paths and
    expectations — review each before registering on ai-01 (paths `C:\Users\jsboi\…` need
    remapping to `C:\Users\MYIA\…`). Check for collisions with existing ai-01 scheduled tasks
-   (`NanoClaw-Watchdog`, `MCP-Chain-Watchdog`).
+   (`NanoClaw-Watchdog`, `MCP-Chain-Watchdog`). Registered on ai-01: cron-output (:11/:41, 14/10), review
+   (:07/:37, 15/10), cluster-tour (:19/:49, 16/10 — after its `[WARN]` was moved from a direct `global.md`
+   write to a bus append). MCP watchdog: not registered — ai-01 already runs roo-extensions' `MCP-Chain-Healthcheck` (measured 16/10, Ready,
+   0x0; no task named `MCP-Chain-Watchdog` exists here).
 3. **Backup**: `hermes-backup.ps1` follows `%USERPROFILE%` (remapped 15/10), uses the local
    `alpine:3.19`, always restarts the container (`try/finally`) and has `-DryRun`. It STOPS the bot:
    run it when no job is in flight (`last_dispatch.dispatched_at` ≤ `last_run_at` for every enabled

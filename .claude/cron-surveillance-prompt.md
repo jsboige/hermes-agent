@@ -100,7 +100,7 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       (NanoClaw sans objection, cycle 04:45Z) : `Compression` ajouté à l'ensemble HERMES du prompt `99adb22edff5`, exemple
       retiré de la ligne NON-ASSIGNÉ, via `cron.jobs.update_job` dans le conteneur (verrou `jobs.json`), seul `prompt`
       changé (sauvegarde `cron/jobs.json.bak-20261016T0500Z`). Drift +2 publié sur #17073 (c.6209268462, 06:08Z) ;
-      reste à voir `meta.unassigned` vide.
+      `unassigned 0` rapporté par le bot dès le cycle 08:18Z.
 - [x] Tier âgé v1.1 → v1.2 dans le prompt pr-review (16/10 07:38Z, demande du bot INFO 06:07Z) : la spec v1.2 est
       mergée (roo-extensions #4218 ; #4215 fermée en doublon). Item 4 réécrit : pool sans plafond par
       `gh api …/pulls?state=open&sort=created&direction=asc&per_page=100`, total recoupé via `Link rel="last"`, pages
@@ -108,8 +108,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       inchangés. Même texte dans le seed `jobs.bootstrap.json` (`restore-config.sh` ne régénère pas les prompts). Live
       via `update_job` dans le conteneur, seul `prompt` changé (`fire_claim` = battement du run 07:35Z en vol),
       sauvegarde `cron/jobs.json.bak-20261016T0738Z`. Le « `--limit 200` OBLIGATOIRE » cité par le bot n'était ni dans
-      le prompt ni dans le volume (repris d'une REPLY de pair). À vérifier : un STATUS pr-review avec promotion tier
-      porte `pool N open, pages P`.
+      le prompt ni dans le volume (repris d'une REPLY de pair). Vérifié fire 10:53Z : le run 08:05Z porte le prompt
+      v1.2 et écrit « pool 437 open recoupé » ; aucune promotion depuis (chaîne couverte), donc la forme `#N … pages P`
+      reste à voir sur la première promotion.
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
@@ -119,9 +120,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       plus récentes d'abord) — tout échantillonnage par PR s'est aveuglé sur CoursIA. Vérifier à chaque fire :
       `review-watchdog.log` OK avec un âge cohérent avec le dernier `[STATUS Hermes pr-review]`, et
       `Get-ScheduledTaskInfo Hermes-*` LastTaskResult 0x0. 15/10 : cron-output étendu à `SEARCH-DUMP` et
-      `RUN-ERROR` (dry-run PS 5.1 : 7 runs relevés, exactement les 7 manqués du jour, 0 faux positif sur 26 h). Watchdog cluster-tour : NE PAS enregistrer en l'état — son `[WARN]` fait un
-      `Add-Content` direct sur `global.md` (l.238), qui contourne la moitié PG du dashboard v3 ; à repasser par le
-      MCP/CLI RooSync d'abord.
+      `RUN-ERROR` (dry-run PS 5.1 : 7 runs relevés, exactement les 7 manqués du jour, 0 faux positif sur 26 h). Watchdog cluster-tour : **enregistré le 16/10 11:01Z**
+      (`Hermes-ClusterTour-Watchdog`, :19/:49, non élevé, dry-run posté avant). Son `[WARN]` passe maintenant par le
+      bus (`roosync_dashboard append` en MCP/HTTP, idempotent par tour), plus par `Add-Content` sur `global.md` ; il
+      lit aussi les archives de condensation postérieures au tour. 1er run manuel : `OK` (T#167), 0x0. À vérifier :
+      verdict du tour de 12:13Z dans `cluster-tour-watchdog.log` au tick de 12:49Z.
 - [x] Backup volume — 1er snapshot réel le 15/10 07:30Z : `C:\Users\MYIA\hermes-backups\hermes-20261015-073019Z.tar.gz`
       (546 Mo, gzip OK, 23 912 entrées dont state.db/config/SOUL/jobs/gh, sha256[:16] `0553dd73a0f6cdbf`), arrêt bot 148 s,
       teardown propre (0 job en vol, SessionDB fermée). Le ledger du gateway marque quand même la vie précédente

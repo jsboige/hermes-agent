@@ -15,7 +15,7 @@
 #   .\register-host-watchdog.ps1 -Watchdog review -Apply   # write launcher + register task
 
 param(
-    [ValidateSet("cron-output", "review")]
+    [ValidateSet("cron-output", "review", "cluster-tour")]
     [string]$Watchdog = "cron-output",
     [string]$LauncherDir = "C:\ProgramData\claude-hidden-launchers",
     [int]$IntervalMinutes = 30,
@@ -26,10 +26,12 @@ $ErrorActionPreference = "Stop"
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
 # Start minutes are off :00 and distinct per organ: :07/:37 for review, :11/:41
-# for cron-output (the cluster-tour watchdog also uses :07/:37 on po-2026).
+# for cron-output, :19/:49 for cluster-tour (on po-2026 it shared :07/:37; :19
+# is too early for the :13 tour's 15-min window, so the verdict lands at :49).
 $organ = @{
-    "cron-output" = @{ TaskName = "Hermes-CronOutput-Watchdog"; StartMinute = 11 }
-    "review"      = @{ TaskName = "Hermes-Review-Watchdog";     StartMinute = 7 }
+    "cron-output"  = @{ TaskName = "Hermes-CronOutput-Watchdog";  StartMinute = 11 }
+    "review"       = @{ TaskName = "Hermes-Review-Watchdog";      StartMinute = 7 }
+    "cluster-tour" = @{ TaskName = "Hermes-ClusterTour-Watchdog"; StartMinute = 19 }
 }[$Watchdog]
 $TaskName = $organ.TaskName
 $StartMinute = $organ.StartMinute
