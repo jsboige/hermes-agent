@@ -110,8 +110,21 @@ reported only as measured (its signed posts or observed fires).
    remapping to `C:\Users\MYIA\…`). Check for collisions with existing ai-01 scheduled tasks
    (`NanoClaw-Watchdog`, `MCP-Chain-Watchdog`). Registered on ai-01: cron-output (:11/:41, 14/10), review
    (:07/:37, 15/10), cluster-tour (:19/:49, 16/10 — after its `[WARN]` was moved from a direct `global.md`
-   write to a bus append). MCP watchdog: not registered — ai-01 already runs roo-extensions' `MCP-Chain-Healthcheck` (measured 16/10, Ready,
-   0x0; no task named `MCP-Chain-Watchdog` exists here).
+   write to a bus append). MCP watchdog: **not registered, by decision** (measured 16/10 16:4xZ):
+   - Its premise is gone. The running image no longer lets a bridge die after 5 failed reconnects:
+     `tools/mcp_tool_server_run.py` parks the server and self-probes every `_PARKED_RETRY_INTERVAL` = 300 s,
+     for an initial-connect failure too (`_park`, #16788 / #57129). A bridge comes back by itself within
+     ~5 min of the proxy's recovery. This was read in the code, not yet seen live: 0 `parking` lines in the
+     bot's logs since 14/10.
+   - Its Stage 1 is dead here. The pattern `hermes gateway run` matches no process in this container: the
+     gateway is PID 386, a python with `argv[0]='hermes'`. Every recovery would therefore go straight to
+     Stage 2 (`docker restart`) and kill in-flight jobs, while the bot heals on its own.
+   - The blind spot it never covered (bridge up, backend dead, incident 2026-08-12→15) is ai-01's
+     `MCP-Chain-Healthcheck` (roo-extensions; Ready, 0x0) plus routine check 6. No task named
+     `MCP-Chain-Watchdog` exists here.
+
+   At po-2026's return, check whether `Hermes-MCP-Watchdog` is still registered there. That image (06/10
+   sync) has the same parking, so the same reasoning probably applies. Verify it there before deciding.
 3. **Backup**: `hermes-backup.ps1` follows `%USERPROFILE%` (remapped 15/10), uses the local
    `alpine:3.19`, always restarts the container (`try/finally`) and has `-DryRun`. It STOPS the bot:
    run it when no job is in flight (`last_dispatch.dispatched_at` ≤ `last_run_at` for every enabled

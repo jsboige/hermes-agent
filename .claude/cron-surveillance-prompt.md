@@ -129,6 +129,12 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       (PENDING n'avance pas, OK avance), état remis au tour de 00:13Z (sauvegarde `logs/…-state.json.bak-20261016T1400Z`),
       run réel : `OK` sur le tour de 12:13Z (titre à 12:17:13Z), `OkCount=2`. À chaque fire : le log doit montrer un
       `OK` ou `MISSING` pour chaque tour (00:13Z, 12:13Z), jamais un PENDING suivi seulement de SKIP.
+      **Watchdog MCP : NON enregistré, décision tranchée au fire 16:36Z (mesures dans le runbook, Phase 2).**
+      (1) Le code de l'image ne laisse plus mourir un pont : après 5 échecs, et dès l'échec de la 1re connexion,
+      il parque le serveur et le resonde toutes les 300 s (`_park`, lu dans le code ; 0 parcage dans les logs du
+      bot depuis le 14/10). (2) Son Stage 1 cherche `hermes gateway run`, qui ne correspond à aucun processus ici :
+      il irait droit à `docker restart`. (3) L'angle mort « pont vivant, backend mort » est couvert par
+      `MCP-Chain-Healthcheck` et le check 6. Il ne reste à cet item que le contrôle du tour de 00:13Z (17/10).
 - [x] Backup volume — 1er snapshot réel le 15/10 07:30Z : `C:\Users\MYIA\hermes-backups\hermes-20261015-073019Z.tar.gz`
       (546 Mo, gzip OK, 23 912 entrées dont state.db/config/SOUL/jobs/gh, sha256[:16] `0553dd73a0f6cdbf`), arrêt bot 148 s,
       teardown propre (0 job en vol, SessionDB fermée). Le ledger du gateway marque quand même la vie précédente
@@ -159,6 +165,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       exact ; il supprime donc l'appel `web_search` du bot, exécute SearXNG lui-même, injecte le texte et clôt le tour.
       Correctif confié à po-2023 (Refs #28 du dépôt claudish). La parade reste « justifiée jusqu'au déploiement » :
       la retirer quand claudish annonce le déploiement, pas avant (ACK posté 16/10 ~02:05Z).
+      Fire 16:36Z : le correctif existe — PR claudish **#498** « disposition trois voies » (po-2023, 15:13Z : un nom
+      d'outil déclaré exactement par le client est transmis, et n'est plus supprimé), OUVERTE, à rebaser après #485.
+      Attendre : #498 mergée PUIS hub redéployé (annonce claudish). La fusion seule ne suffit pas.
 - [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
       messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
       `myia-ai-01:hermes-agent`. vllm a re-pointé son livreur (PR vllm#119, 15/10 23:2xZ) ; son probe

@@ -347,6 +347,8 @@ Auth: `Authorization: Bearer ${MCP_AUTH_TOKEN}` from `.env.secrets`.
 
 **Root cause:** `MCPServerTask.run()` in `tools/mcp_tool.py` gives up after `_MAX_RECONNECT_RETRIES = 5` attempts (line 1648). Once the task returns, the bridge is dead until the gateway process restarts.
 
+**Superseded in the current code (read 2026-10-16):** after the budget is exhausted (and after an initial-connect failure), `tools/mcp_tool_server_run.py` now **parks** the server and self-probes every `_PARKED_RETRY_INTERVAL` = 300 s. The run task never returns (#16788 / #57129), so a bridge recovers by itself within ~5 min of the proxy's return. On ai-01 the watchdog below is therefore **not registered**. Its Stage 1 pattern `hermes gateway run` also matches no process in that image, which would send every recovery straight to `docker restart`. Measurements and the po-2026 note are in `roosync-cluster/docs/SEAT-AI-01.md` (Phase 2).
+
 **Watchdog:** `roosync-cluster/scripts/hermes-mcp-watchdog.ps1` runs every 15 min via Windows Scheduled Task. Recovery escalation:
 
 1. **Stage 1:** `SIGUSR1` to gateway PID — graceful restart, preserves container state
