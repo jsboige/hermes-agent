@@ -101,6 +101,19 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       retiré de la ligne NON-ASSIGNÉ, via `cron.jobs.update_job` dans le conteneur (verrou `jobs.json`), seul `prompt`
       changé (sauvegarde `cron/jobs.json.bak-20261016T0500Z`). Drift +2 publié sur #17073 (c.6209268462, 06:08Z) ;
       `unassigned 0` rapporté par le bot dès le cycle 08:18Z.
+      **Fire 19:53Z :**
+      - Le cycle 53 (17:57Z) a de nouveau posté un commentaire littéral `@comment21127.md` (`gh api -f body=@…`). Le bot
+        l'a supprimé lui-même ; 404 vérifié.
+      - Le prompt n'interdisait `-f body=@` que pour le PATCH de la checklist, pas pour le POST du commentaire. Ajout
+        après « UN commentaire sur l'issue de SÉRIE » : poster avec `-F body=@comment.md`.
+      - Sémantique mesurée sans effet de bord sur `POST /markdown`, avec le `gh` de l'hôte et celui du conteneur :
+        `-F` lit le fichier, `-f` publie le littéral.
+      - Live via `update_job`, seul `prompt` changé (5864 → 6060), sauvegarde `cron/jobs.json.bak-20261016T2000Z`.
+      - **Écart source/live trouvé** : `roosync-cluster/prompts/hermes-notebook-audit.prompt.md` n'avait pas reçu le
+        changement « Compression » de 05:00Z. La source est réalignée sur le live.
+      - Règle : toute édition live d'un prompt met à jour sa source dans le même geste.
+      - À vérifier aux cycles suivants : plus de littéral `@…` dans les commentaires d'audit (`check-review-bodies.py`
+        ne voit que les reviews).
 - [x] Tier âgé v1.1 → v1.2 dans le prompt pr-review (16/10 07:38Z, demande du bot INFO 06:07Z) : la spec v1.2 est
       mergée (roo-extensions #4218 ; #4215 fermée en doublon). Item 4 réécrit : pool sans plafond par
       `gh api …/pulls?state=open&sort=created&direction=asc&per_page=100`, total recoupé via `Link rel="last"`, pages

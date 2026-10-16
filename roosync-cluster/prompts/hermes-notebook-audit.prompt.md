@@ -6,9 +6,9 @@ Identité GitHub : toute écriture (commentaire, PATCH de body, ouverture d'issu
 
 ## Partition
 Population = `gh api repos/jsboige/CoursIA/git/trees/main?recursive=1`, blobs `MyIA.AI.Notebooks/**/*.ipynb` hors `/_archive/` et `research_archive.ipynb`.
-HERMES = 1er dossier ∈ {SymbolicAI, ML, IIT, Probas, Sudoku, RL, CaseStudies, Complexity, cross-series} + `GradeBook.ipynb` (racine).
+HERMES = 1er dossier ∈ {SymbolicAI, ML, IIT, Probas, Sudoku, RL, CaseStudies, Complexity, Compression, cross-series} + `GradeBook.ipynb` (racine). `Compression` ajouté le 16/10 (PROPOSAL du siège, NanoClaw sans objection).
 NANOCLAW, ne jamais toucher = {GenAI, Search, QuantConnect, GameTheory, NLP} (`GenAI/CaseStudies` = NanoClaw).
-Autre dossier (ex. `Compression/`) = NON-ASSIGNÉ : ne pas auditer, le signaler.
+Autre dossier = NON-ASSIGNÉ : ne pas auditer, le signaler.
 
 ## Ledger /opt/data/audit-17073/ledger.json
 `{path: {status: non-audité|audité|skip-pr, issue, date, findings}, meta: {population, added_since_prev, removed_since_prev, unassigned, cycle}}`.
@@ -32,7 +32,7 @@ Checkout `/opt/data/audit-17073/coursia` (`git clone --filter=blob:none --sparse
 ## ÉTAPE 4 — dépôt
 Finding = 4 champs OBLIGATOIRES : `cellules` (id), `extrait` verbatim ≤200 car., `classe` (slug stable : stale-claim, concept-error, exercise-mismatch, solution-leak, reading-before-code, orphan-statement, navigation-misplaced, paraphrase-stack, progression-break, prerequisite-gap, concept-ordering, difficulty-jump, output-uninterpreted, figure-unlabelled, figure-missing, wall-of-text…), `pourquoi` (1 phrase). Sinon non déposé. Ni style ni enrichissement (gel #13410 : candidat ≠ travail ; une lecture existante se réécrit, jamais une seconde).
 Classe gelée dans la série (≥3 occurrences + organe déployé) = versement 1 ligne (chemin + cellule + nature). Instance ratée par un organe existant = « ligne additive » sur #17073. 3ᵉ occurrence d'une classe sans organe = proposition d'organe sur #17073.
-UN commentaire sur l'issue de SÉRIE (RAS si rien). Série sans issue : l'ouvrir (`[Audit #17073] Série X — partition Hermes`, panorama d'arc, niveau et ordre PROPOSÉS, checklist). Cocher : GET body → changer 1 ligne → `gh api -X PATCH repos/jsboige/CoursIA/issues/N --input body.json` (JAMAIS `-f body=@fichier`) ; vérifier diff = 1 ligne et [x] +1 (body réécrit à l'identique hors cette ligne : aucun saut de ligne ajouté en fin — #17782 14/10 en a gagné un). Relire le commentaire posté (auteur, longueur, aucun littéral `@/`).
+UN commentaire sur l'issue de SÉRIE (RAS si rien). Poster : `gh api repos/jsboige/CoursIA/issues/N/comments -F body=@comment.md` (`-F` majuscule LIT le fichier ; `-f body=@…` publie le littéral « @comment.md » — récidive 16/10 17:57Z sur #21127). Série sans issue : l'ouvrir (`[Audit #17073] Série X — partition Hermes`, panorama d'arc, niveau et ordre PROPOSÉS, checklist). Cocher : GET body → changer 1 ligne → `gh api -X PATCH repos/jsboige/CoursIA/issues/N --input body.json` (JAMAIS `-f body=@fichier`) ; vérifier diff = 1 ligne et [x] +1 (body réécrit à l'identique hors cette ligne : aucun saut de ligne ajouté en fin — #17782 14/10 en a gagné un). Relire le commentaire posté (auteur, longueur, aucun littéral `@/`).
 
 ## ÉTAPE 6 — ledger + garde de population
 Marquer audité (date serveur). Re-dériver la population (même filtre) : added_since_prev, removed_since_prev, non-assignés ; rename (même nom normalisé) = statut porté. Drift ≠ 0 → 1 ligne sur #17073. Idempotence : rebuild relancé, le notebook reste audité.
