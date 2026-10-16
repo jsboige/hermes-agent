@@ -99,8 +99,17 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       le 15/10 ~23:00Z (messageId `hermes-seat-compression-partition-20261015`) : Hermes les prend. **FAIT 16/10 05:00Z**
       (NanoClaw sans objection, cycle 04:45Z) : `Compression` ajouté à l'ensemble HERMES du prompt `99adb22edff5`, exemple
       retiré de la ligne NON-ASSIGNÉ, via `cron.jobs.update_job` dans le conteneur (verrou `jobs.json`), seul `prompt`
-      changé (sauvegarde `cron/jobs.json.bak-20261016T0500Z`). À vérifier au fire suivant : le cycle d'audit publie le
-      drift +2 sur #17073 et `meta.unassigned` se vide.
+      changé (sauvegarde `cron/jobs.json.bak-20261016T0500Z`). Drift +2 publié sur #17073 (c.6209268462, 06:08Z) ;
+      reste à voir `meta.unassigned` vide.
+- [x] Tier âgé v1.1 → v1.2 dans le prompt pr-review (16/10 07:38Z, demande du bot INFO 06:07Z) : la spec v1.2 est
+      mergée (roo-extensions #4218 ; #4215 fermée en doublon). Item 4 réécrit : pool sans plafond par
+      `gh api …/pulls?state=open&sort=created&direction=asc&per_page=100`, total recoupé via `Link rel="last"`, pages
+      croissantes jusqu'à la première éligible, ligne STATUS `pool N open, pages P` ; critères (a)(b)(c) et caps
+      inchangés. Même texte dans le seed `jobs.bootstrap.json` (`restore-config.sh` ne régénère pas les prompts). Live
+      via `update_job` dans le conteneur, seul `prompt` changé (`fire_claim` = battement du run 07:35Z en vol),
+      sauvegarde `cron/jobs.json.bak-20261016T0738Z`. Le « `--limit 200` OBLIGATOIRE » cité par le bot n'était ni dans
+      le prompt ni dans le volume (repris d'une REPLY de pair). À vérifier : un STATUS pr-review avec promotion tier
+      porte `pool N open, pages P`.
 - [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
