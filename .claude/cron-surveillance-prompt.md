@@ -148,7 +148,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       bot depuis le 14/10). (2) Son Stage 1 cherche `hermes gateway run`, qui ne correspond à aucun processus ici :
       il irait droit à `docker restart`. (3) L'angle mort « pont vivant, backend mort » est couvert par
       `MCP-Chain-Healthcheck` et le check 6. **Tour de 00:13Z CONTRÔLÉ (fire 01:53Z, 17/10) : PENDING à 00:19Z puis OK
-      à 00:49Z, `ok` 2→3 — le correctif PENDING se comporte comme prévu sur son premier cycle réel.**
+      à 00:49Z, `ok` 2→3 — le correctif PENDING se comporte comme prévu sur son premier cycle réel.** Fire 04:52Z :
+      conteneur toujours up depuis 23:19Z, parade vérifiée en place (`agent:` < `auxiliary:`), restore identique.
+      **Panne provider api.z.ai 03:23–03:59Z** (HTTP 400 via le hub, classe documentée) : 4 RUN-ERROR (pr-review ×2,
+      ping-intercom, notebook-audit), résorbée au run 04:05Z. Non silencieuse, documentée par le bot (INCIDENT 04:23Z),
+      sous le seuil (d) — pas d'escalade. Aucune récidive du `list index out of range` (01:47Z isolé).
 
 - [x] **Course au boot MCP corrigée (fire 01:53Z, 17/10).** Au reboot machine du 16/10, le premier boot (21:12Z) a perdu
       la course : la sonde du restore (tir unique) partait avant que `myia-mcp-proxy` (même hôte) réponde → fallback
@@ -214,7 +218,10 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       corrigerait bien. Mesurer les fins de ligne en Python (`b.count(b'\r\n')`) : sous Git Bash, `grep -c $'\r'` compte
       TOUTES les lignes. Aucun autre changement de code depuis le build (seuls `.gitattributes`/`.gitignore`) : à faire
       dans une fenêtre creuse de jour, pas de nuit pour ce seul motif.
-- [ ] Dashboard web Hermes : `dashboard.basic_auth` (refuse 0.0.0.0 sans auth) — optionnel.
+- [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
+      hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
+      `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
+      loopback. Réouvrir uniquement si le binding change.
 
 ## Post (OBLIGATOIRE, fin de session)
 
