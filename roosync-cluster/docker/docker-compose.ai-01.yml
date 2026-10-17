@@ -29,7 +29,14 @@ services:
       - HERMES_GID=10000
     command: ["gateway", "run"]
 
+  # DO NOT enable by default: the dashboard container runs the full volume restore at
+  # boot (cont-init 013), which fights the live gateway for jobs.json (flock) and dies
+  # mid-restore ~every 45 s — 244 restore passes on the shared volume in 1.8 h on
+  # 2026-10-17, before `docker compose stop dashboard`. It was already stopped before
+  # that day's image swap; `--force-recreate` revived it. Start it only with
+  # `--profile dashboard`, and expect the crash loop until the restore is container-scoped.
   dashboard:
+    profiles: ["dashboard"]
     image: hermes-agent:ai-01
     container_name: hermes-dashboard
     restart: unless-stopped

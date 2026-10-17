@@ -220,6 +220,13 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `search` a survécu au strip du boot** (`agent:` l.36 < `auxiliary:` l.62) — preuve réelle du correctif de
       placement. Rollback : `docker tag` inverse + compose force-recreate (étiquette `hermes-agent:ai-01-pre-rebuild-20261017`,
       ancienne `47f9aef78048`). Au fire suivant : premier tour complet de jobs sur la nouvelle image.
+      **Fire 10:53Z : tour de jobs confirmé sur la nouvelle image** (7 rapports, 0 échec, 6 reviews propres, audit
+      cycle 67 OK). **Incident dashboard** : le `--force-recreate` a réveillé `hermes-dashboard`, stoppé depuis avant
+      le 16/10 — il bouclait (241 restarts en 1,8 h) : son boot rejoue le restore complet SUR LE VOLUME PARTAGÉ et meurt
+      en cours de route (~45 s par passe, vraisemblablement bloqué sur le flock de `jobs.json` tenu par le scheduler du
+      gateway). Stoppé (`docker compose stop dashboard`), puis **fencé par un profil compose** (`profiles: ["dashboard"]`
+      dans `docker-compose.ai-01.yml`, commentaire expliquant) : un `up -d` futur ne le relancera plus. Le gateway n'a
+      pas souffert (mitigation et jobs intacts à travers les 244 passes). Le conteneur stoppé reste en place (Exited).
 - [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
       hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
       `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
