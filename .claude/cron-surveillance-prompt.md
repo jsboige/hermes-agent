@@ -212,12 +212,14 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       roo-extensions), pas appliqué. **Sur leur oui** : ajouter `as` aux appels inbox/send des prompts du bot
       (notebook-audit ÉTAPE 0.6 + C5), puis vérifier au cycle d'audit suivant. Backlog `Image/` : 0 dossier reçu après
       00:05Z et 01:05Z (signalé à vllm sur le même fil).
-- [ ] Image : rebuild pour embarquer `.env.example` LF (commit 53afa34f10) — après backup. Faible enjeu : ce fichier
-      ne sert qu'à amorcer `.env` sur un volume NEUF (l'image en a 554 lignes CRLF ; le volume actuel n'est pas touché).
-      Revérifié 15/10 23:00Z : arbre et index en LF (`git ls-files --eol` → `i/lf w/lf`), image en CRLF → le rebuild
-      corrigerait bien. Mesurer les fins de ligne en Python (`b.count(b'\r\n')`) : sous Git Bash, `grep -c $'\r'` compte
-      TOUTES les lignes. Aucun autre changement de code depuis le build (seuls `.gitattributes`/`.gitignore`) : à faire
-      dans une fenêtre creuse de jour, pas de nuit pour ce seul motif.
+- [x] Image : rebuild FAIT le 17/10 (fire 07:53Z→09:15Z) — `.env.example` maintenant LF dans l'image (0 CRLF mesuré,
+      contre 554 avant). Séquence : fenêtre sans job en vol (attente active sur jobs.json) → backup réel
+      `hermes-20261017-083538Z.tar.gz` (2 065 Mo, gzip OK, arrêt ~8 min — le volume a triplé depuis le 15/10) →
+      `docker compose up -d --force-recreate` (gateway + dashboard). Vérifié : image `98ac6fd1b701`, sonde restore
+      « reachable — using remote » au 1er essai, gateway 1, ponts 3×3, 0 parcage, 4 jobs enabled, et **la parade
+      `search` a survécu au strip du boot** (`agent:` l.36 < `auxiliary:` l.62) — preuve réelle du correctif de
+      placement. Rollback : `docker tag` inverse + compose force-recreate (étiquette `hermes-agent:ai-01-pre-rebuild-20261017`,
+      ancienne `47f9aef78048`). Au fire suivant : premier tour complet de jobs sur la nouvelle image.
 - [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
       hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
       `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
