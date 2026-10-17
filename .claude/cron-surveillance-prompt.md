@@ -148,7 +148,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       bot depuis le 14/10). (2) Son Stage 1 cherche `hermes gateway run`, qui ne correspond à aucun processus ici :
       il irait droit à `docker restart`. (3) L'angle mort « pont vivant, backend mort » est couvert par
       `MCP-Chain-Healthcheck` et le check 6. **Tour de 00:13Z CONTRÔLÉ (fire 01:53Z, 17/10) : PENDING à 00:19Z puis OK
-      à 00:49Z, `ok` 2→3 — le correctif PENDING se comporte comme prévu sur son premier cycle réel.** Fire 04:52Z :
+      à 00:49Z, `ok` 2→3 — le correctif PENDING se comporte comme prévu sur son premier cycle réel.**
+      **Tour de 12:13Z 17/10 CONTRÔLÉ (fire 13:53Z) : PENDING à 12:19Z puis OK à 12:49Z, `ok` 3→4 — 2e cycle réel
+      conforme (T#170 posté 12:16:29Z ≥ fire 12:13:34Z).** Fire 04:52Z :
       conteneur toujours up depuis 23:19Z, parade vérifiée en place (`agent:` < `auxiliary:`), restore identique.
       **Panne provider api.z.ai 03:23–03:59Z** (HTTP 400 via le hub, classe documentée) : 4 RUN-ERROR (pr-review ×2,
       ping-intercom, notebook-audit), résorbée au run 04:05Z. Non silencieuse, documentée par le bot (INCIDENT 04:23Z),
@@ -209,7 +211,12 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       roo-extensions. Correctif = `as: "myia-ai-01:hermes-agent"` (#3591), qui exige `myia-ai-01` dans
       `ROOSYNC_TRUSTED_CALLER_IDS` (`D:\roo-extensions\mcps\internal\servers\roo-state-manager\.env`, aujourd'hui
       `myia-po-2026` seul) + relance `MCP-Proxy-RSM`. Infra roo-extensions : DEMANDÉ (global 16/10 ~02:00Z, crossPost
-      roo-extensions), pas appliqué. **Sur leur oui** : ajouter `as` aux appels inbox/send des prompts du bot
+      roo-extensions). **RÉPONSE reçue 17/10 01:40Z (mention `ai01-c28-reply-hermes-trusted-callers-20261017`, lue au
+      fire 13:53Z dans l'archive de condensation) : PAS APPLIQUÉ — escaladé à l'arbitrage user (RX105)** : ai-01 a
+      qualifié l'ajout machine-seul `myia-ai-01` d'élargissement de permissions (la liste actuelle est machine-only) ;
+      reco ai-01 = option (b) forme granulaire `machine:workspace`, qui nécessite une modif de code roo-state-manager.
+      L'item est donc USER-GATED (RX105), plus « en attente roo-extensions » — ne pas re-demander à la lane.
+      **Sur décision user RX105 (et modif code si (b))** : ajouter `as` aux appels inbox/send des prompts du bot
       (notebook-audit ÉTAPE 0.6 + C5), puis vérifier au cycle d'audit suivant. Backlog `Image/` : 0 dossier reçu après
       00:05Z et 01:05Z (signalé à vllm sur le même fil).
 - [x] Image : rebuild FAIT le 17/10 (fire 07:53Z→09:15Z) — `.env.example` maintenant LF dans l'image (0 CRLF mesuré,
@@ -227,6 +234,7 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       gateway). Stoppé (`docker compose stop dashboard`), puis **fencé par un profil compose** (`profiles: ["dashboard"]`
       dans `docker-compose.ai-01.yml`, commentaire expliquant) : un `up -d` futur ne le relancera plus. Le gateway n'a
       pas souffert (mitigation et jobs intacts à travers les 244 passes). Le conteneur stoppé reste en place (Exited).
+      Fire 13:53Z : toujours Exited (137) 3 h, compose default = gateway seul — fence tient.
 - [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
       hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
       `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
