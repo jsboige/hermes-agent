@@ -147,7 +147,17 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       il parque le serveur et le resonde toutes les 300 s (`_park`, lu dans le code ; 0 parcage dans les logs du
       bot depuis le 14/10). (2) Son Stage 1 cherche `hermes gateway run`, qui ne correspond à aucun processus ici :
       il irait droit à `docker restart`. (3) L'angle mort « pont vivant, backend mort » est couvert par
-      `MCP-Chain-Healthcheck` et le check 6. Il ne reste à cet item que le contrôle du tour de 00:13Z (17/10).
+      `MCP-Chain-Healthcheck` et le check 6. **Tour de 00:13Z CONTRÔLÉ (fire 01:53Z, 17/10) : PENDING à 00:19Z puis OK
+      à 00:49Z, `ok` 2→3 — le correctif PENDING se comporte comme prévu sur son premier cycle réel.**
+
+- [x] **Course au boot MCP corrigée (fire 01:53Z, 17/10).** Au reboot machine du 16/10, le premier boot (21:12Z) a perdu
+      la course : la sonde du restore (tir unique) partait avant que `myia-mcp-proxy` (même hôte) réponde → fallback
+      local → **cassé sur ce siège** (aucun montage `/opt/roo-state-manager`, la copie `/tmp` échoue, `.env` jamais créé —
+      INFO bot 21:54Z, tool_calls roosync_* en dégradé ~2 h, sauvé par le second boot 23:19Z qui a gagné la course).
+      Correctif `hermes-restore-config.sh` : (1) la sonde retente 9×10 s ; (2) sans montage `/opt/roo-state-manager`,
+      le script écrit les URLs distantes QUAND MÊME (le gateway parque un serveur MCP défaillant et le resonde toutes
+      les 300 s — voir watchdog MCP ci-dessus) ; le fallback local ne reste que sur un siège qui porte le montage
+      (po-2026). `bash -n` OK, copie volume redéployée identique (backup `restore-config.sh.bak-20261017T0200Z`).
 - [x] Backup volume — 1er snapshot réel le 15/10 07:30Z : `C:\Users\MYIA\hermes-backups\hermes-20261015-073019Z.tar.gz`
       (546 Mo, gzip OK, 23 912 entrées dont state.db/config/SOUL/jobs/gh, sha256[:16] `0553dd73a0f6cdbf`), arrêt bot 148 s,
       teardown propre (0 job en vol, SessionDB fermée). Le ledger du gateway marque quand même la vie précédente
@@ -181,6 +191,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       Fire 16:36Z : le correctif existe — PR claudish **#498** « disposition trois voies » (po-2023, 15:13Z : un nom
       d'outil déclaré exactement par le client est transmis, et n'est plus supprimé), OUVERTE, à rebaser après #485.
       Attendre : #498 mergée PUIS hub redéployé (annonce claudish). La fusion seule ne suffit pas.
+      **Fire 01:53Z (17/10) : la parade avait DISPARU au boot 23:19Z** (reboot machine) — le restore strippe tout à partir
+      de la première ligne `auxiliary:`, et le bloc `agent:` avait été posé en fin de fichier le 15/10. Bot sans protection
+      ~2,6 h (0 récidive). Réappliquée AU-DESSUS de `auxiliary:` (commentaire dans le fichier, backup
+      `config.yaml.bak-20261017T0205Z`, YAML revalidé) + seedée dans `roosync-cluster/config/config.ai-01.yaml`.
+      À chaque fire : `grep -c disabled_toolsets config.yaml` = 1 (au-dessus d'`auxiliary:`).
 - [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
       messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
       `myia-ai-01:hermes-agent`. vllm a re-pointé son livreur (PR vllm#119, 15/10 23:2xZ) ; son probe

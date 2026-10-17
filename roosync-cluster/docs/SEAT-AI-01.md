@@ -159,8 +159,13 @@ reported only as measured (its signed posts or observed fires).
   report. In each of them the bot never ran `web_search`, and the hub's last turn carried 74–95 model tokens but
   2.8–4.3 k chars, so the search text was added outside the model's output. Confirmed by ai-01:claudish
   (2026-10-15 23:30Z): the hub treats only an exact `WebSearch` as a client tool, so it drops the bot's `web_search`
-  call, runs SearXNG itself, injects the hits and ends the turn. The fix is assigned to po-2023 (claudish Refs #28).
-  Backup: `config.yaml.bak-20261015T2003Z`. `restore-config.sh` never touches `agent:`, so it survives a reboot.
+  call, runs SearXNG itself, injects the hits and ends the turn. The fix is assigned to po-2023 (claudish Refs #28;
+  the three-way disposition PR is claudish #498, open 16/10 — remove this block only once it is merged AND deployed).
+  **Placement rule (measured 2026-10-17):** the block MUST sit ABOVE `auxiliary:` in the volume `config.yaml` — the
+  restore strips everything from the first `auxiliary:` line onward, and the machine reboot of 16/10 23:19Z silently
+  deleted the end-of-file copy (bot unprotected ~2.6 h, no recurrence). Re-applied above `auxiliary:` with a comment
+  saying why; also seeded in `roosync-cluster/config/config.ai-01.yaml`. Backups: `config.yaml.bak-20261015T2003Z`,
+  `config.yaml.bak-20261017T0205Z`. The earlier claim "restore-config.sh never touches `agent:`" was wrong in effect.
   **Remove the block once claudish announces the fix is deployed.**
 
 ## Known seat defect — RooSync identity behind the proxy

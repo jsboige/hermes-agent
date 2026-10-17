@@ -226,21 +226,40 @@ stt:
 EOF
 
 # 3b. MCP servers — detect if ai-01 proxy is available, fallback to local
+# Boot race (measured ai-01 2026-10-16 21:12Z): hermes and the proxy container
+# start together after a machine reboot; a single-shot probe can fire before the
+# proxy answers, flipping the seat onto the local fallback — which is broken
+# wherever /opt/roo-state-manager is not mounted (degraded ~2h until a manual
+# restart). Retry: the proxy is same-host on ai-01 and wins every real race;
+# the delay only costs boots where it is genuinely down.
 MCP_PROXY_UP=false
 if command -v curl &>/dev/null; then
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-       "http://192.168.0.47:9090/sk-agent/mcp" \
-       -H "Authorization: Bearer ${MCP_AUTH}" \
-       -H "Content-Type: application/json" \
-       -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
-       --connect-timeout 5 --max-time 10 2>/dev/null || true)
-    case "$HTTP_CODE" in
-        200|401|403|405) MCP_PROXY_UP=true ;;
-    esac
+    for _attempt in 1 2 3 4 5 6 7 8 9; do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+           "http://192.168.0.47:9090/sk-agent/mcp" \
+           -H "Authorization: Bearer ${MCP_AUTH}" \
+           -H "Content-Type: application/json" \
+           -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
+           --connect-timeout 5 --max-time 10 2>/dev/null || true)
+        case "$HTTP_CODE" in
+            200|401|403|405) MCP_PROXY_UP=true; break ;;
+        esac
+        sleep 10
+    done
 fi
 
-if [ "$MCP_PROXY_UP" = true ]; then
-    echo "  -> MCP proxy (192.168.0.47:9090) reachable — using remote"
+# A seat without the /opt/roo-state-manager mount (ai-01) can NEVER run the
+# local fallback — there is no source to copy. Point it at the proxy anyway:
+# the gateway parks a failed MCP server and self-probes every 300 s
+# (tools/mcp_tool_server_run.py), so the bridges heal by themselves once the
+# proxy returns. Only a seat that carries the mount (po-2026) keeps the local
+# fallback.
+if [ "$MCP_PROXY_UP" = true ] || [ ! -d /opt/roo-state-manager ]; then
+    if [ "$MCP_PROXY_UP" = true ]; then
+        echo "  -> MCP proxy (192.168.0.47:9090) reachable — using remote"
+    else
+        echo "  -> MCP proxy unreachable but /opt/roo-state-manager absent — writing remote URLs anyway (bridges self-probe every 300s)"
+    fi
     cat >> "$DATA/config.yaml" << EOF
 
 # MCP servers — LAN direct to ai-01 proxy

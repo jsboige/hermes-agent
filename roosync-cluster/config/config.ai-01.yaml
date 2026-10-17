@@ -24,6 +24,13 @@ telegram:
 display:
   personality: "default"
 
+# Seat mitigation until the hub search-dump fix is deployed (claudish Refs #28, PR #498).
+# MUST sit above auxiliary: — the restore strips everything from the first auxiliary: line
+# onward, and the 2026-10-16 23:19Z boot deleted an end-of-file copy of this block.
+agent:
+  disabled_toolsets:
+    - search
+
 auxiliary:
   compression:
     provider: "zai"
