@@ -3,13 +3,13 @@
     Hermes cluster-tour global-post watchdog — detects the silent-skip of ETAPE 3.
 
 .DESCRIPTION
-    The cluster-tour cron (job 525e5650a8ac, schedule "13 */12 * * *", fires
-    ~00:13/12:13 UTC) must append a [CLUSTER-HEALTH] post on the GLOBAL dashboard
-    at every fire (prompt ETAPE 3, marked OBLIGATOIRE/INCONDITIONNEL). Since
-    2026-08-12 it silently skips that post non-deterministically while reporting
-    status=ok ("completed successfully") — 4 consecutive fires post-T#40 without a
-    global post (issue jsboige/hermes-agent #3). Prompt-side emphasis reached its
-    limit; a prompt cannot close a prompt-skipping defect.
+    The cluster-tour cron (schedule "13 */12 * * *", fires ~00:13/12:13 UTC) must
+    append a [CLUSTER-HEALTH] post on the GLOBAL dashboard at every fire (prompt
+    ETAPE 3, marked OBLIGATOIRE/INCONDITIONNEL). Since 2026-08-12 it silently skips
+    that post non-deterministically while reporting status=ok ("completed
+    successfully") — 4 consecutive fires post-T#40 without a global post (issue
+    jsboige/hermes-agent #3). Prompt-side emphasis reached its limit; a prompt
+    cannot close a prompt-skipping defect.
 
     Post-hoc root cause (2026-08-15, ai-01): the 12→15/08 skips were caused by the
     roo-state-manager backend instance dying behind sparfenyuk — initialize was still
@@ -32,13 +32,14 @@
       5. instrument the rate: every check writes its verdict (OK/MISSING) to a
          counter-able state file.
 
-    INDEPENDENT observer: reads everything from the HOST volume, so it keeps
-    working when the Hermes container itself is down (exactly when the gap is most
-    likely). Sources:
-      - C:\Users\jsboi\.hermes\cron\jobs.json   → job 525e5650a8ac fire anchor:
+    INDEPENDENT observer: reads from the HOST volume and the shared drive, so it
+    keeps working when the Hermes container itself is down (exactly when the gap
+    is most likely). Sources:
+      - %USERPROFILE%\.hermes\cron\jobs.json   → cluster-tour job fire anchor:
         last_dispatch.dispatched_at (START of the run), fallback last_run_at
       - G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md
-        → last message block timestamp containing [CLUSTER-HEALTH]
+        and the condensation archives written after the fire
+        (dashboards\archive\global-<ts>.md) → last [CLUSTER-HEALTH] title
 
     False positive 2026-09-20 00:37Z (roo-extensions #3743) — DUAL cause, both
     structural, both verified firsthand (watchdog log + global.md + jobs.json):
@@ -56,35 +57,61 @@
          not be true regardless of the anchor. The title pattern now tolerates
          any number of intercalated bracketed tags.
 
-    The [WARN] is appended directly to global.md in the same format the
-    roo-state-manager writes (### [<ts>] machine|workspace), so every MCP reader
-    of the cluster sees the hole exactly where the post should have been.
+    Seat port 2026-10-16 (ai-01 interim seat):
+      - The [WARN] goes through the RooSync bus (roosync_dashboard append on
+        global, MCP over HTTP, the transport of roo-extensions
+        mcp-chain-watchdog.ps1) instead of Add-Content on global.md: a direct
+        file write skips the PG half of the v3 dashboard store. Author = this
+        seat (machine from COMPUTERNAME, workspace hermes-agent); the messageId is
+        keyed on the fire, so a retry or a later tick never posts it twice.
+      - The tour title is also searched in the archives written after the fire:
+        an auto-condensation between the post and the check would otherwise
+        archive the block and read as MISSING (the #3743 b. path). Measured
+        16/10: T#165 and T#166 live only in archive/global-2026-10-15T*.md.
+      - Write-Log writes to the host stream. On the success stream its line was
+        captured in the return value of every function that logs before
+        returning, so "return $false" came back as a truthy array and
+        "return $null" as a non-null one (the defect fixed in
+        hermes-review-watchdog.ps1 on 2026-10-15).
+      - -DryRun: verdict plus the exact WARN and Telegram text, and one real
+        read-only call on the bus route; posts nothing, alerts nothing, writes no
+        state.
+
     Telegram alert goes to the same review chat as hermes-review-watchdog.ps1.
-    A cooldown (state file) prevents spam; every run logs to
-    cluster-tour-watchdog.log. Date handling follows the review-watchdog pattern:
-    all timestamps normalized to UTC [datetime] via ConvertTo-UtcDateTime
+    A cooldown (state file) prevents spam; only a DELIVERED alert starts it.
+    Every run logs to cluster-tour-watchdog.log. Dates follow the review-watchdog
+    pattern: all timestamps normalized to UTC [datetime] via ConvertTo-UtcDateTime
     (avoids the fr-FR Invoke-RestMethod/culture date bugs).
 
 .NOTES
-    Deploy as a Windows Scheduled Task on po-2026:
+    Deploy as a Windows Scheduled Task on the seat host:
     - Trigger: every 30 minutes (off-minute, e.g. :07/:37)
-    - Action: powershell -NoProfile -File "C:\dev\hermes-agent\roosync-cluster\scripts\hermes-cluster-tour-watchdog.ps1"
-    - Run whether user is logged on or not
+    - Action: powershell -NoProfile -File "<repo>\roosync-cluster\scripts\hermes-cluster-tour-watchdog.ps1"
+    - Prove it first: -DryRun
 
-    Author: Hermes Agent workspace (operator Claude Code po-2026)
+    Author: Hermes Agent workspace (operator Claude Code po-2026, seat port ai-01)
     Issue:  jsboige/hermes-agent #3
 #>
 
 param(
-    [string]$ClusterTourJobId = "525e5650a8ac",
-    [string]$JobsFile = "C:\Users\jsboi\.hermes\cron\jobs.json",
+    [string]$ClusterTourJobId = "",   # empty = the job named *cluster-tour* (ids differ per seat)
+    [string]$JobsFile = "$env:USERPROFILE\.hermes\cron\jobs.json",
     [string]$GlobalDashFile = "G:\Mon Drive\Synchronisation\RooSync\.shared-state\dashboards\global.md",
-    [string]$HostEnvFile = "C:\Users\jsboi\.hermes\.env",
+    [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
+    [string]$SecretsFile = "$env:USERPROFILE\.hermes\.env.secrets",   # MCP_AUTH_TOKEN (bus bearer)
+    [string[]]$RsmUrls = @(
+        "http://127.0.0.1:9090/roo-state-manager/mcp",
+        "https://mcp-tools.myia.io/roo-state-manager/mcp"
+    ),
+    [string]$SeatMachineId = "$env:COMPUTERNAME".ToLowerInvariant(),
+    [string]$SeatWorkspace = "hermes-agent",
+    [int]$BusTimeoutSec = 60,            # an append can take ~45 s when condensation fires
     [string]$ReviewChatId = "-1003904676273",
     [double]$PostMarginMinutes = 15.0,   # how long after a fire the global post may appear
     [double]$CooldownMinutes = 120.0,    # min gap between alerts
     [string]$LogPath = "$PSScriptRoot\..\logs\cluster-tour-watchdog.log",
-    [string]$StateFile = "$PSScriptRoot\..\logs\cluster-tour-watchdog-state.json"
+    [string]$StateFile = "$PSScriptRoot\..\logs\cluster-tour-watchdog-state.json",
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -92,22 +119,25 @@ $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
 # --- helpers ---
 
+# Host stream, never the success stream: functions below log and then return a
+# value, and a Write-Output line would be returned along with it.
 function Write-Log {
     param([string]$Message, [string]$Level = "INFO")
     $timestamp = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", $Invariant)
     $entry = "[$timestamp] [$Level] $Message"
-    Write-Output $entry
+    Write-Host $entry
+    if ($DryRun) { return }
     $logDir = Split-Path $LogPath -Parent
     if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Force | Out-Null }
     Add-Content -Path $LogPath -Value $entry -Encoding UTF8
 }
 
 function Get-EnvValue {
-    param([string]$Key)
-    if (-not (Test-Path $HostEnvFile)) { return $null }
-    $line = Get-Content $HostEnvFile -ErrorAction SilentlyContinue |
+    param([string]$Path, [string]$Key)
+    if (-not (Test-Path $Path)) { return $null }
+    $line = Get-Content $Path -ErrorAction SilentlyContinue |
         Where-Object { $_ -match "^$Key=" } | Select-Object -First 1
-    if ($line) { return ($line -replace "^$Key=", "") }
+    if ($line) { return ($line -replace "^$Key=", "").Trim().Trim('"').Trim("'") }
     return $null
 }
 
@@ -130,12 +160,13 @@ function Get-State {
 
 function Set-State {
     param([hashtable]$State)
+    if ($DryRun) { return }
     $State | ConvertTo-Json | Set-Content $StateFile -Encoding UTF8
 }
 
 function Send-Telegram {
     param([string]$Text)
-    $token = Get-EnvValue "TELEGRAM_BOT_TOKEN"
+    $token = Get-EnvValue $HostEnvFile "TELEGRAM_BOT_TOKEN"
     if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN"; return $false }
     try {
         $body = @{ chat_id = $ReviewChatId; text = $Text; disable_web_page_preview = $true } | ConvertTo-Json
@@ -148,9 +179,57 @@ function Send-Telegram {
         return $true
     }
     catch {
-        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN" | Out-Null
+        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN"
         return $false
     }
+}
+
+# One roosync_dashboard call over MCP HTTP: initialize, notifications/initialized
+# (when the route hands out a session id — sparfenyuk does, TBXark does not),
+# then tools/call. Routes are tried in order. Returns the response text, or
+# $null when no route answered with a non-error result. Same transport as
+# roo-extensions mcp-chain-watchdog.ps1 (Invoke-McpProbe / Publish-FleetNote).
+function Invoke-RsmDashboard {
+    param([hashtable]$Arguments)
+    $bearer = Get-EnvValue $SecretsFile "MCP_AUTH_TOKEN"
+    if (-not $bearer) { Write-Log "MCP_AUTH_TOKEN missing from $SecretsFile — no bus route." "WARN"; return $null }
+    # Content-Type goes through -ContentType only: PS 5.1 can refuse it in -Headers too.
+    $headers = @{
+        'Authorization' = "Bearer $bearer"
+        'Accept'        = 'application/json, text/event-stream'
+    }
+    $initBody = '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"hermes-cluster-tour-watchdog","version":"2.0"}}}'
+    $callJson = @{
+        jsonrpc = '2.0'; id = 2; method = 'tools/call'
+        params  = @{ name = 'roosync_dashboard'; arguments = $Arguments }
+    } | ConvertTo-Json -Depth 8 -Compress
+    # Same PS 5.1 trap as Send-Telegram: a string body goes out as cp1252.
+    $callBytes = [System.Text.Encoding]::UTF8.GetBytes($callJson)
+    foreach ($url in $RsmUrls) {
+        try {
+            $init = Invoke-WebRequest -Uri $url -Method Post -Headers $headers -Body $initBody `
+                -ContentType 'application/json' -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+            $callHeaders = $headers
+            $sid = $null
+            foreach ($k in @($init.Headers.Keys)) { if ("$k" -ieq 'mcp-session-id') { $sid = $init.Headers[$k]; break } }
+            if ($sid) {
+                $callHeaders = @{} + $headers
+                $callHeaders['mcp-session-id'] = "$sid"
+                $null = Invoke-WebRequest -Uri $url -Method Post -Headers $callHeaders `
+                    -Body '{"jsonrpc":"2.0","method":"notifications/initialized"}' `
+                    -ContentType 'application/json' -UseBasicParsing -TimeoutSec 10 -ErrorAction SilentlyContinue
+            }
+            $resp = Invoke-WebRequest -Uri $url -Method Post -Headers $callHeaders -Body $callBytes `
+                -ContentType 'application/json; charset=utf-8' -UseBasicParsing -TimeoutSec $BusTimeoutSec -ErrorAction Stop
+            # Content can come back as bytes when the route answers in SSE.
+            $content = if ($resp.Content -is [byte[]]) { [System.Text.Encoding]::UTF8.GetString($resp.Content) } else { "$($resp.Content)" }
+            if ($resp.StatusCode -eq 200 -and $content -notmatch '"isError"\s*:\s*true') { return $content }
+            Write-Log "bus route $url answered an error result" "WARN"
+        } catch {
+            Write-Log "bus route $url failed: $($_.Exception.Message)" "WARN"
+        }
+    }
+    return $null
 }
 
 # Cluster-tour fire ANCHOR from jobs.json (host volume — works container-down).
@@ -162,9 +241,9 @@ function Send-Telegram {
 function Get-ClusterTourFireAnchor {
     if (-not (Test-Path $JobsFile)) { Write-Log "jobs.json not found at $JobsFile" "WARN"; return $null }
     try {
-        $data = Get-Content $JobsFile -Raw | ConvertFrom-Json
+        $data = Get-Content $JobsFile -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($job in $data.jobs) {
-            if ("$($job.id)" -eq $ClusterTourJobId -and $job.name -like "*cluster-tour*") {
+            if ((-not $ClusterTourJobId -or "$($job.id)" -eq $ClusterTourJobId) -and $job.name -like "*cluster-tour*") {
                 $anchor = $null
                 if ($job.last_dispatch -and $job.last_dispatch.dispatched_at) {
                     $anchor = ConvertTo-UtcDateTime $job.last_dispatch.dispatched_at
@@ -181,72 +260,85 @@ function Get-ClusterTourFireAnchor {
     }
 }
 
-# Timestamp of the last message block in global.md whose content contains
-# "[CLUSTER-HEALTH]". Blocks are formatted "### [<ts>] machine|workspace".
+# Timestamp of the last message block whose TITLE is a tour post, read from
+# global.md plus every archive written at or after $Since (an archive named
+# global-<yyyy-MM-ddTHH-mm-ss>.md holds the blocks condensed away at that time).
+# Blocks are formatted "### [<ts>] machine|workspace".
 function Get-LastClusterHealthTimestamp {
+    param([datetime]$Since)
     if (-not (Test-Path $GlobalDashFile)) { Write-Log "global.md not found at $GlobalDashFile" "WARN"; return $null }
-    try {
-        $text = Get-Content $GlobalDashFile -Raw
-        $pattern = '(?m)^### \[([0-9T:\-\.]+Z)\][^\r\n]*\r?\n([\s\S]*?)(?=^### \[|\z)'
-        $blocks = [regex]::Matches($text, $pattern)
-        $lastTs = $null
-        foreach ($m in $blocks) {
-            $blockBody = $m.Groups[2].Value
-            # Match the tour's section TITLE only, NOT a bare mention — the [WARN]
-            # body itself says "no append [CLUSTER-HEALTH]" and would otherwise
-            # self-validate as a posted tour. Three title formats exist:
-            #   old  (<=T#71):  "## [CLUSTER-HEALTH] T#71 — 2026-09-01T12:20Z"
-            #   new  (>=T#72):  "[CLUSTER-HEALTH] T#72 — Hermes (po-2026), 02/09 00:20Z"
-            #   tags (>=T#112): "[CLUSTER-HEALTH][DONE] T#112 — Hermes po-2026 — 00:14Z"
-            #                   (dashboard append renders the message tags inline)
-            # Line-anchored + mandatory "T#<digits>" after the tag(s): the WARN
-            # body only mentions [CLUSTER-HEALTH] mid-line, never as "T#N" at start.
-            # "(?:\[[^\]]+\])*" tolerates any number of intercalated bracketed tags
-            # (roo-extensions #3743: the strict "\s+T#N" successor matched nothing
-            # since T#112, making last_health=never and every verdict MISSING).
-            # (Covers roo-extensions #3379's measured format; `\d+` is kept so a
-            # malformed bare "T#" mention can never be counted as a tour.)
-            if ($blockBody -match "(?m)^#{0,2}\s*\[CLUSTER-HEALTH\](?:\[[^\]]+\])*\s+T#\d+") {
-                $t = ConvertTo-UtcDateTime $m.Groups[1].Value
-                if ($null -ne $t) { $lastTs = $t }
+    $files = @($GlobalDashFile)
+    $archiveDir = Join-Path (Split-Path $GlobalDashFile -Parent) "archive"
+    if (Test-Path $archiveDir) {
+        foreach ($a in Get-ChildItem $archiveDir -Filter "global-*.md" -ErrorAction SilentlyContinue) {
+            if ($a.Name -match '^global-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})') {
+                $archivedAt = ConvertTo-UtcDateTime "$($Matches[1])T$($Matches[2]):$($Matches[3]):$($Matches[4])Z"
+                if ($null -ne $archivedAt -and $archivedAt -ge $Since) { $files += $a.FullName }
             }
         }
-        return $lastTs
-    } catch {
-        Write-Log "global.md parse failed: $($_.Exception.Message)" "WARN"
-        return $null
     }
+    $lastTs = $null
+    foreach ($f in $files) {
+        try {
+            $text = Get-Content $f -Raw -Encoding UTF8
+            $pattern = '(?m)^### \[([0-9T:\-\.]+Z)\][^\r\n]*\r?\n([\s\S]*?)(?=^### \[|\z)'
+            foreach ($m in [regex]::Matches($text, $pattern)) {
+                $blockBody = $m.Groups[2].Value
+                # Match the tour's section TITLE only, NOT a bare mention — the [WARN]
+                # body itself says "no append [CLUSTER-HEALTH]" and would otherwise
+                # self-validate as a posted tour. Three title formats exist:
+                #   old  (<=T#71):  "## [CLUSTER-HEALTH] T#71 — 2026-09-01T12:20Z"
+                #   new  (>=T#72):  "[CLUSTER-HEALTH] T#72 — Hermes (po-2026), 02/09 00:20Z"
+                #   tags (>=T#112): "[CLUSTER-HEALTH][DONE] T#112 — Hermes po-2026 — 00:14Z"
+                #                   (dashboard append renders the message tags inline)
+                # Line-anchored + mandatory "T#<digits>" after the tag(s): the WARN
+                # body only mentions [CLUSTER-HEALTH] mid-line, never as "T#N" at start.
+                # "(?:\[[^\]]+\])*" tolerates any number of intercalated bracketed tags
+                # (roo-extensions #3743: the strict "\s+T#N" successor matched nothing
+                # since T#112, making last_health=never and every verdict MISSING).
+                if ($blockBody -match "(?m)^#{0,2}\s*\[CLUSTER-HEALTH\](?:\[[^\]]+\])*\s+T#\d+") {
+                    $t = ConvertTo-UtcDateTime $m.Groups[1].Value
+                    if ($null -ne $t -and ($null -eq $lastTs -or $t -gt $lastTs)) { $lastTs = $t }
+                }
+            }
+        } catch {
+            Write-Log "dashboard parse failed ($f): $($_.Exception.Message)" "WARN"
+        }
+    }
+    return $lastTs
 }
 
-# Append a [WARN] on global.md in the roo-state-manager intercom format so the
-# hole is visible exactly where the tour post should have been. Read by every
-# MCP dashboard reader of the cluster (ai-01 included) — no MCP proxy needed.
-function Append-GlobalWarn {
+function Get-WarnContent {
     param([string]$TourTs)
-    if (-not (Test-Path $GlobalDashFile)) { Write-Log "global.md not found — cannot append [WARN]" "WARN"; return $false }
-    try {
-        $ts = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ", $Invariant)
-        $warn = @(
-            "",
-            "### [$ts] myia-po-2026|hermes-agent",
-            "",
-            "## [WARN] cluster-tour ETAPE 3 non exécutée — tour $TourTs",
-            "",
-            "**Watchdog:** le fire `hermes-cluster-tour` ($TourTs UTC) a rapporté `status=ok` mais aucun append `[CLUSTER-HEALTH]` sur ce dashboard global dans les $PostMarginMinutes min suivantes. Cause possible : échec silencieux du write MCP (bus RooSync down, cf. incident 12→15/08 : instance RSM morte derrière sparfenyuk, handshake OK) OU prompt-skip (issue jsboige/hermes-agent #3). Croiser avec l'état du bus MCP (checks 6/8 de la routine opérateur). Vérification programmatique post-cron. Le tour n'est PAS re-firé (spec ai-01).",
-            ""
-        ) -join "`n"
-        Add-Content -Path $GlobalDashFile -Value $warn -Encoding UTF8
-        return $true
-    } catch {
-        Write-Log "global.md append failed: $($_.Exception.Message)" "WARN" | Out-Null
-        return $false
+    return @(
+        "## [WARN] cluster-tour ETAPE 3 non exécutée — tour $TourTs",
+        "",
+        "**Watchdog:** le fire ``hermes-cluster-tour`` ($TourTs UTC) a rapporté ``status=ok`` mais aucun append ``[CLUSTER-HEALTH]`` sur ce dashboard global dans les $PostMarginMinutes min suivantes (archives de condensation comprises). Cause possible : échec silencieux du write MCP (bus RooSync down, cf. incident 12→15/08 : instance RSM morte derrière sparfenyuk, handshake OK) OU prompt-skip (issue jsboige/hermes-agent #3). Croiser avec l'état du bus MCP (checks 6/8 de la routine opérateur). Vérification programmatique post-cron. Le tour n'est PAS re-firé (spec ai-01)."
+    ) -join "`n"
+}
+
+# Post the [WARN] on global through the bus, so it lands in both halves of the
+# v3 store and every dashboard reader of the cluster sees the hole where the
+# tour post should have been. Idempotent per fire (messageId).
+function Publish-GlobalWarn {
+    param([datetime]$FireAnchor)
+    $fireKey = $FireAnchor.ToString("yyyyMMddTHHmmssZ", $Invariant)
+    $result = Invoke-RsmDashboard @{
+        action    = 'append'
+        type      = 'global'
+        author    = @{ machineId = $SeatMachineId; workspace = $SeatWorkspace }
+        tags      = @('WARN', 'cluster-tour-watchdog')
+        messageId = "cluster-tour-watchdog-missing-$SeatMachineId-$fireKey"
+        content   = Get-WarnContent $FireAnchor.ToString("o", $Invariant)
     }
+    return ($null -ne $result -and $result -match 'success\\{0,2}"\s*:\s*true')
 }
 
 # --- main ---
 
 $now = [datetime]::UtcNow
 $state = Get-State
+if ($DryRun) { Write-Log "DRY-RUN: no post, no alert, no state write, no log file." }
 
 $fireAnchor = Get-ClusterTourFireAnchor
 if ($null -eq $fireAnchor) {
@@ -261,7 +353,10 @@ if ($null -eq $fireAnchor) {
     exit 0
 }
 
-$lastHealth = Get-LastClusterHealthTimestamp
+# -5 min grace below the anchor: with dispatched_at as anchor the tour post is by
+# construction posterior to it; the grace only absorbs sync skew between the
+# container write and the host-side read of the shared drive.
+$lastHealth = Get-LastClusterHealthTimestamp -Since $fireAnchor.AddMinutes(-5)
 
 # Only assert fires that are old enough for the post to have appeared AND that
 # we have not already checked.
@@ -272,9 +367,6 @@ $fireAgeMin   = ($now - $fireAnchor).TotalMinutes
 $verdict = "SKIP"
 $detail = ""
 if ($isNewFire -and $fireAgeMin -ge $PostMarginMinutes) {
-    # -5 min grace below the anchor: with dispatched_at as anchor the tour post
-    # is by construction posterior to it; the grace only absorbs GDrive sync
-    # skew between the container write and the host-side read of global.md.
     $postOk = $null -ne $lastHealth -and $lastHealth -ge $fireAnchor.AddMinutes(-5)
     if ($postOk) {
         $verdict = "OK"
@@ -313,22 +405,39 @@ if ($verdict -eq "OK") {
     if ($lastAlert) {
         if ((($now - $lastAlert).TotalMinutes) -lt $CooldownMinutes) { $cooldownOk = $false }
     }
+    $msg = "[CLUSTER-TOUR-WATCHDOG] MISSING — le fire cluster-tour @ $($fireAnchor.ToString('o',$Invariant)) n'a pas posté [CLUSTER-HEALTH] sur global. Verdict count: OK=$okCount MISSING=$missingCount. [WARN] posté sur global. Voir issue jsboige/hermes-agent #3."
 
-    $warnAppended = Append-GlobalWarn $fireAnchor.ToString("o", $Invariant)
-    Write-Log "MISSING: [WARN] appended to global.md (appended=$warnAppended)." $(if ($warnAppended) { "INFO" } else { "ERROR" })
-
-    if ($cooldownOk) {
-        $msg = "[CLUSTER-TOUR-WATCHDOG] MISSING — le fire cluster-tour @ $($fireAnchor.ToString('o',$Invariant)) n'a pas posté [CLUSTER-HEALTH] sur global. Verdict count: OK=$okCount MISSING=$missingCount. [WARN] appended on global.md. Voir issue jsboige/hermes-agent #3."
-        $sent = Send-Telegram $msg
-        Write-Log "Telegram alert sent (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
-        $newAlertAt = $now.ToString("o", $Invariant)
+    if ($DryRun) {
+        Write-Log "DRY-RUN would post on global as $SeatMachineId|$SeatWorkspace :`n$(Get-WarnContent $fireAnchor.ToString('o', $Invariant))"
+        Write-Log "DRY-RUN would send Telegram (cooldownOk=$cooldownOk): $msg"
     } else {
-        Write-Log "Alert suppressed (cooldown ${CooldownMinutes}min not elapsed)." "INFO"
+        $warnPosted = Publish-GlobalWarn $fireAnchor
+        Write-Log "MISSING: [WARN] posted on global via the bus (posted=$warnPosted)." $(if ($warnPosted) { "INFO" } else { "ERROR" })
+        if ($cooldownOk) {
+            $sent = Send-Telegram $msg
+            Write-Log "Telegram alert sent (sent=$sent)." $(if ($sent -eq $true) { "INFO" } else { "WARN" })
+            # Only a delivered alert starts the cooldown: a failed send reached no one.
+            if ($sent -eq $true) { $newAlertAt = $now.ToString("o", $Invariant) }
+        } else {
+            Write-Log "Alert suppressed (cooldown ${CooldownMinutes}min not elapsed)." "INFO"
+        }
     }
 }
 
+if ($DryRun) {
+    # Prove the write route without writing: one read-only call on the same path.
+    $probe = Invoke-RsmDashboard @{ action = 'list' }
+    $routeOk = $null -ne $probe -and $probe -match 'dashboards\\{0,2}"\s*:'
+    Write-Log "DRY-RUN bus route probe (roosync_dashboard list): $(if ($routeOk) { 'OK' } else { 'FAILED' })" $(if ($routeOk) { "INFO" } else { "WARN" })
+}
+
+# A PENDING fire is NOT checked yet: recording it here made the next tick read
+# "no new fire" and SKIP it, so the fire was never asserted (measured 16/10 on
+# ai-01: 12:13Z tour PENDING at 12:19Z, SKIP at 12:49Z). Latent at :07/:37,
+# where the first tick after a :13 fire is already past the window.
+$fireAsserted = $verdict -eq "OK" -or $verdict -eq "MISSING"
 Set-State @{
-    LastCheckedRunAt = if ($isNewFire) { $fireAnchor.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
+    LastCheckedRunAt = if ($fireAsserted) { $fireAnchor.ToString("o", $Invariant) } else { $state.LastCheckedRunAt }
     LastAlertAt      = $newAlertAt
     OkCount          = $okCount
     MissingCount     = $missingCount
