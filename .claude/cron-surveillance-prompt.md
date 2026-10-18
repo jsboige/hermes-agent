@@ -219,6 +219,12 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       **Sur décision user RX105 (et modif code si (b))** : ajouter `as` aux appels inbox/send des prompts du bot
       (notebook-audit ÉTAPE 0.6 + C5), puis vérifier au cycle d'audit suivant. Backlog `Image/` : 0 dossier reçu après
       00:05Z et 01:05Z (signalé à vllm sur le même fil).
+- [x] Attestation anti-dérive Z.AI claudish#81 (fire 04:30Z, 18/10) : scan complet du siège (`.env`, `.env.secrets` ×2,
+      `config.yaml`, `~/.claude/settings.json`) → **aucune clé Z.AI directe**. Le seul identifiant nommé `GLM_API_KEY`
+      (volume `.env` L18) porte la VALEUR de `CLAUDISH_PROXY_KEY` (fp sha256[:12] `6302afdcc061`, identique aux
+      guillemets près) avec `GLM_BASE_URL` = hub `192.168.0.50:3000/v1` : c'est la clé proxy du hub, pas une clé Z.AI.
+     Posté sur workspace-claudish (`attestation-81-hermes-ai01`). **Piège empreinte** : normaliser les guillemets avant
+      sha256 — le même secret quoté/non-quoté donne 2 fp différents (`0bf54309e409` vs `6302afdcc061` mesuré).
 - [x] Image : rebuild FAIT le 17/10 (fire 07:53Z→09:15Z) — `.env.example` maintenant LF dans l'image (0 CRLF mesuré,
       contre 554 avant). Séquence : fenêtre sans job en vol (attente active sur jobs.json) → backup réel
       `hermes-20261017-083538Z.tar.gz` (2 065 Mo, gzip OK, arrêt ~8 min — le volume a triplé depuis le 15/10) →
