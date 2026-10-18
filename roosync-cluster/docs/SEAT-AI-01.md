@@ -154,19 +154,21 @@ reported only as measured (its signed posts or observed fires).
 
 ## Live-config mitigations (volume `config.yaml`, not in the repo)
 
-- **`agent.disabled_toolsets: [search]`** (2026-10-15 20:03Z): removes `web_search` from every cron run and keeps
-  `web_extract`. It was applied because 5 pr-review runs in a row (17:46→19:38Z) ended on raw web-search hits with no
-  report. In each of them the bot never ran `web_search`, and the hub's last turn carried 74–95 model tokens but
-  2.8–4.3 k chars, so the search text was added outside the model's output. Confirmed by ai-01:claudish
-  (2026-10-15 23:30Z): the hub treats only an exact `WebSearch` as a client tool, so it drops the bot's `web_search`
-  call, runs SearXNG itself, injects the hits and ends the turn. The fix is assigned to po-2023 (claudish Refs #28;
-  the three-way disposition PR is claudish #498, open 16/10 — remove this block only once it is merged AND deployed).
-  **Placement rule (measured 2026-10-17):** the block MUST sit ABOVE `auxiliary:` in the volume `config.yaml` — the
-  restore strips everything from the first `auxiliary:` line onward, and the machine reboot of 16/10 23:19Z silently
-  deleted the end-of-file copy (bot unprotected ~2.6 h, no recurrence). Re-applied above `auxiliary:` with a comment
-  saying why; also seeded in `roosync-cluster/config/config.ai-01.yaml`. Backups: `config.yaml.bak-20261015T2003Z`,
-  `config.yaml.bak-20261017T0205Z`. The earlier claim "restore-config.sh never touches `agent:`" was wrong in effect.
-  **Remove the block once claudish announces the fix is deployed.**
+- **`agent.disabled_toolsets: [search]`** (2026-10-15 20:03Z) — **LIFTED 2026-10-18 13:4xZ.**
+  Applied originally because 5 pr-review runs in a row (17:46→19:38Z, 15/10) ended on raw web-search
+  hits with no report: the hub treated only an exact `WebSearch` as a client tool, swallowed the bot's
+  `web_search`, ran SearXNG itself and injected the text (confirmed by ai-01:claudish 2026-10-15 23:30Z;
+  fix assigned to po-2023, claudish Refs #28, three-way PR claudish #498). **Lift condition met 18/10**:
+  #498 deployed on hub `443471b9` (closed claudish-side), proof GREEN at Hermes's exact call form
+  (`tool_use` returned under the client's own name, 0 injected text — coordinator DONE 11:31Z on
+  workspace-claudish); the bot's cluster-tour lane ACKed and deferred the edit to the harness lane.
+  Lift: block removed from the volume config (backup `config.yaml.bak-20260518T1345Z-pre-search-lift`…
+  exact name `bak-<ts>-pre-search-lift`) and from the seed `config.ai-01.yaml`. Rollback if a SEARCH-DUMP
+  signature reappears in cron outputs (watchdog signal) = restore the backup block above `auxiliary:`.
+  **Placement rule (kept for any future block):** anything the restore must preserve MUST sit ABOVE the
+  first `auxiliary:` line — the restore strips everything from there onward, and the 2026-10-16 23:19Z
+  boot silently deleted an end-of-file copy of this block (bot unprotected ~2.6 h). The earlier claim
+  "restore-config.sh never touches `agent:`" was wrong in effect.
 
 ## Known seat defect — RooSync identity behind the proxy
 

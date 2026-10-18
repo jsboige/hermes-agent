@@ -24,12 +24,9 @@ telegram:
 display:
   personality: "default"
 
-# Seat mitigation until the hub search-dump fix is deployed (claudish Refs #28, PR #498).
-# MUST sit above auxiliary: — the restore strips everything from the first auxiliary: line
-# onward, and the 2026-10-16 23:19Z boot deleted an end-of-file copy of this block.
-agent:
-  disabled_toolsets:
-    - search
+# Search mitigation LIFTED 2026-10-18: claudish fix #498 deployed (hub 443471b9, proof green
+# at Hermes's exact call form — coordinator DONE 11:31Z on workspace-claudish). The
+# `agent.disabled_toolsets: [search]` block is gone from this seed and from the volume config.
 
 auxiliary:
   compression:

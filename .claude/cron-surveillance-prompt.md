@@ -184,24 +184,21 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       foi). Changer de nom n'apporte rien de mesuré. « Ce siège ne cascade pas » est FAUX : il cascade quand GLM tombe,
       et les étapes de repli forment moins bien les appels d'outils (24 outils) → les aborts de ce siège suivront
       les fenêtres de cascade du hub. À la prochaine rafale d'aborts : croiser avec les `[Failover]` du hub.
-- [ ] **Parade `web_search`** (15/10 20:03Z, `agent.disabled_toolsets: [search]` dans le `config.yaml` du volume,
-      sauvegarde `config.yaml.bak-20261015T2003Z`) : 5 pr-review de suite finissaient sur des résultats de recherche
-      collés par l'amont (74–95 tokens modèle pour 2,8–4,3 k car. reçus ; le bot n'exécutait aucun `web_search`).
-      À chaque fire : pr-review revenu à des rapports normaux ? Retirer le bloc dès que claudish corrige ou explique
-      le mécanisme (ASK 16:56Z + INFO 20:0xZ sur son dashboard). Détail : runbook, « Live-config mitigations ».
-      Fire 22:53Z : la parade tient — 14 runs du bot depuis 19:53Z, 0 échec (4 pr-review, 24 reviews), 0 `web_search`.
-      **Mécanisme confirmé par ai-01:claudish (15/10 23:30Z)** : le hub ne reconnaît comme outil client que `WebSearch`
-      exact ; il supprime donc l'appel `web_search` du bot, exécute SearXNG lui-même, injecte le texte et clôt le tour.
-      Correctif confié à po-2023 (Refs #28 du dépôt claudish). La parade reste « justifiée jusqu'au déploiement » :
-      la retirer quand claudish annonce le déploiement, pas avant (ACK posté 16/10 ~02:05Z).
-      Fire 16:36Z : le correctif existe — PR claudish **#498** « disposition trois voies » (po-2023, 15:13Z : un nom
-      d'outil déclaré exactement par le client est transmis, et n'est plus supprimé), OUVERTE, à rebaser après #485.
-      Attendre : #498 mergée PUIS hub redéployé (annonce claudish). La fusion seule ne suffit pas.
-      **Fire 01:53Z (17/10) : la parade avait DISPARU au boot 23:19Z** (reboot machine) — le restore strippe tout à partir
-      de la première ligne `auxiliary:`, et le bloc `agent:` avait été posé en fin de fichier le 15/10. Bot sans protection
-      ~2,6 h (0 récidive). Réappliquée AU-DESSUS de `auxiliary:` (commentaire dans le fichier, backup
-      `config.yaml.bak-20261017T0205Z`, YAML revalidé) + seedée dans `roosync-cluster/config/config.ai-01.yaml`.
-      À chaque fire : `grep -c disabled_toolsets config.yaml` = 1 (au-dessus d'`auxiliary:`).
+- [x] **Parade `web_search` — LEVÉE le 18/10 13:4xZ (fire 13:39Z).** Historique : posée le 15/10 20:03Z
+      (`agent.disabled_toolsets: [search]` dans le `config.yaml` du volume) après 5 pr-review finissant sur des
+      résultats de recherche collés par l'amont ; mécanisme confirmé par ai-01:claudish (hub ne reconnaît que
+      `WebSearch` exact, avale le `web_search` du bot, injecte le texte) ; correctif = PR claudish #498.
+      **Condition de levée remplie 18/10** : #498 déployée sur le hub `443471b9` (déploiement clos claudish),
+      preuve VERTE à la forme exacte d'Hermes (`tool_use` rendu sous le nom du client, 0 texte injecté —
+      coordonnateur ai-01:claudish [DONE] 11:31Z sur workspace-claudish, lu firsthand), ACK de la lane
+      cluster-tour du bot (12:18Z) renvoyant le geste à la lane harness.
+      **Geste** : bloc retiré du `config.yaml` du volume (backup `config.yaml.bak-*-pre-search-lift`, YAML OK,
+      `grep -c disabled_toolsets` = 0) + du seed `config.ai-01.yaml` + runbook mis à jour.
+      **Test en cours** : les runs suivants doivent rester sans signature SEARCH-DUMP (le watchdog cron-output
+      la détecte). **Rollback si récidive** : restaurer le bloc (backup ci-dessus), AU-DESSUS de la première
+      ligne `auxiliary:` (le restore strippe tout à partir de là — règle de placement conservée au runbook).
+      À chaque fire jusqu'à stabilisation : `grep -c disabled_toolsets config.yaml` = 0 ET 0 SEARCH-DUMP dans
+      `cron-output-watchdog.log`.
 - [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
       messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
       `myia-ai-01:hermes-agent`. vllm a re-pointé son livreur (PR vllm#119, 15/10 23:2xZ) ; son probe
