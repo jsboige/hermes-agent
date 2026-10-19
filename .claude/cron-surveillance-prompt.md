@@ -52,6 +52,11 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses. Un `RUN-ERROR`
    « HTTP 400 … Cannot reach GLM Coding at `https://api.z.ai` » vient du HUB (le bot appelle bien `192.168.0.50:3000`) :
    le hub n'a pas joint z.ai et répond 400, que le client ne rejoue pas (1er cas 15/10 23:06Z, flap hub 23:08Z).
+   **Runs longs = hub lent, pas blocage** (mesuré 19/10 : pr-review 08:35Z encore en vol à 10:36Z, appels API à
+   7–11 min de latence et 37–48 k tokens de sortie ; audit 08:50Z → 10:37Z, 1 h 47). Avant de suspecter un gel :
+   `last_dispatch.dispatched_at` récent ET `fire_claim` qui bat = run vivant ; confirmer dans
+   `/opt/data/logs/agent.log` (`API call #N … latency=…`). Les `already running — skipping` des slots suivants
+   sont bénins — moins de rapports que de slots n'est pas une panne en soi.
 4. **Reviews postées** (hôte) : les reviews du bot, plus récentes d'abord, tous dépôts, en UN appel :
    `gh api graphql -f query='query { user(login:"clusterManager-Myia") { contributionsCollection { pullRequestReviewContributions(first: 100, orderBy:{direction: DESC}) { nodes { pullRequestReview { submittedAt state body commit { oid } } pullRequest { number repository { nameWithOwner } } } } } } }'`
    Instrument versionné : `python roosync-cluster/scripts/check-review-bodies.py <ISO du fire précédent>`
