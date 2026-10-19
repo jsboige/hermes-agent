@@ -144,7 +144,17 @@ function Invoke-Gh {
         return Invoke-RestMethod -Uri "https://api.github.com/$Path" -Headers $script:GhHeaders -TimeoutSec 20 -ErrorAction Stop
     }
     catch {
-        Write-Log "GitHub API call failed ($Path): $($_.Exception.Message)" "WARN" | Out-Host
+        # Surface GitHub's own explanation when there is one (rate limit / abuse
+        # detection 403s carry a JSON message the bare exception hides).
+        $detail = ""
+        try {
+            $resp = $_.Exception.Response
+            if ($resp) {
+                $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
+                $detail = " | body: " + $sr.ReadToEnd()
+            }
+        } catch { }
+        Write-Log "GitHub API call failed ($Path): $($_.Exception.Message)$detail" "WARN" | Out-Host
         return $null
     }
 }
@@ -186,13 +196,24 @@ $script:GhHeaders = @{
 # which is indistinguishable from "the bot never reviews" and is the exact failure
 # this organ was blind to. Failing loudly is the only honest option here.
 if (-not $BotLogin) {
-    $me = Invoke-Gh "user"
+    # 2026-10-19: every :37 tick failed with a transient 403 on /user while every
+    # :07 tick of the same script/token succeeded (5 in a row) - a single-shot
+    # probe here was losing half the ticks. Retry with backoff before aborting.
+    $me = $null
+    foreach ($attempt in 1..3) {
+        $me = Invoke-Gh "user"
+        if ($me -and $me.login) { break }
+        if ($attempt -lt 3) {
+            Write-Log "Login resolution attempt $attempt/3 failed - retrying in 20s." "WARN" | Out-Host
+            Start-Sleep -Seconds 20
+        }
+    }
     if ($me -and $me.login) {
         $BotLogin = $me.login
         Write-Log "Bot login resolved from the token: $BotLogin" "INFO"
     }
     else {
-        Write-Log "Could not resolve the bot login from GH_TOKEN — review detection would match nothing and cry wolf. Aborting." "ERROR"
+        Write-Log "Could not resolve the bot login from GH_TOKEN (3 attempts) — review detection would match nothing and cry wolf. Aborting." "ERROR"
         exit 1
     }
 }
