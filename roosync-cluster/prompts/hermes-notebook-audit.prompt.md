@@ -18,7 +18,7 @@ ABSENT → le reconstruire AVANT tout audit depuis GitHub (vérité partagée) :
 roosync_dashboard read, workspace cluster-coordination, 8 derniers messages : servir d'abord un [TASK-ROUTE]/[ROUTE] adressé à la lane audit, s'il tombe dans la partition.
 
 ## ÉTAPE 0.6 — préaudit
-DMs `[nb-preaudit]` (roosync_messages inbox) + `/opt/data/tmp/preaudit/`. Résoudre chaque dossier au ledger (nom normalisé) : audité ou rename = fantôme, ignorer. Dossier frais (sha == blob du head) d'un non-audité = prioritaire ; ses verdicts sont des HYPOTHÈSES à confirmer en FULL READ. Dossier consommé → DM C5 à myia-ai-01:vllm (proposés/confirmés/rejetés/durée).
+DMs `[nb-preaudit]` (roosync_messages action inbox, TOUJOURS `as: "myia-ai-01:hermes-agent"` — sans ce paramètre le proxy sert l'inbox de roo-extensions ; accepté par le serveur depuis le 19/10) + `/opt/data/tmp/preaudit/`. Résoudre chaque dossier au ledger (nom normalisé) : audité ou rename = fantôme, ignorer. Dossier frais (sha == blob du head) d'un non-audité = prioritaire ; ses verdicts sont des HYPOTHÈSES à confirmer en FULL READ. Dossier consommé → DM C5 à myia-ai-01:vllm (roosync_messages action send, même `as:`) (proposés/confirmés/rejetés/durée).
 
 ## ÉTAPE 1 — choix
 Premier non-audité de l'ordre : (1) porteurs #17066, (2) séries denses (SymbolicAI/SemanticWeb, SymbolicAI/Lean, ML/DataScienceWithAgents), (3) reste ; finir une série commencée. SKIP si une PR ouverte le touche (`gh pr list -R jsboige/CoursIA --state open --json number,files`) → skip-pr, listé dans le [DONE].

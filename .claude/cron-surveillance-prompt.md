@@ -161,6 +161,12 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       **Panne provider api.z.ai 03:23–03:59Z** (HTTP 400 via le hub, classe documentée) : 4 RUN-ERROR (pr-review ×2,
       ping-intercom, notebook-audit), résorbée au run 04:05Z. Non silencieuse, documentée par le bot (INCIDENT 04:23Z),
       sous le seuil (d) — pas d'escalade. Aucune récidive du `list index out of range` (01:47Z isolé).
+      **19/10 22:5xZ : 403 déterministes sur `/user` du review-watchdog** — tous les ticks `:37` ont échoué
+      (18:37→22:37, 5/5) pendant que tous les `:07` passaient : le single-shot perdait un tick sur deux. Correctif :
+      retry 3×20 s sur la résolution du login + corps de la réponse 403 loggé (le JSON de GitHub dit POURQUOI :
+      rate limit / abuse / auth). Parse PS 0 erreur, dry-run vert (`state not written`). **À vérifier aux fires
+      suivants : les ticks `:37` passent** (OK direct ou retry puis OK) ; le corps 403 loggé à la première récidive
+      tranche la cause (corrélation :37 à élucider — rien dans le script ne distingue :07 de :37).
 
 - [x] **Course au boot MCP corrigée (fire 01:53Z, 17/10).** Au reboot machine du 16/10, le premier boot (21:12Z) a perdu
       la course : la sonde du restore (tir unique) partait avant que `myia-mcp-proxy` (même hôte) réponde → fallback
@@ -222,6 +228,13 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       **Sur décision user RX105 (et modif code si (b))** : ajouter `as` aux appels inbox/send des prompts du bot
       (notebook-audit ÉTAPE 0.6 + C5), puis vérifier au cycle d'audit suivant. Backlog `Image/` : 0 dossier reçu après
       00:05Z et 01:05Z (signalé à vllm sur le même fil).
+      **19/10 22:5xZ : RX105 DÉPLOYÉ par roo-extensions** (post 20:35Z sur workspace-hermes-agent :
+      `ROOSYNC_TRUSTED_CALLER_IDS=myia-po-2026,myia-ai-01:hermes-agent`, sonde bout-en-bout : lane acceptée,
+      machine-seule et autre workspace refusés, aucun restart). `as:` ajouté au prompt notebook-audit (ÉTAPE 0.6 inbox
+      + C5 send) : source `prompts/hermes-notebook-audit.prompt.md` + live via `update_job` (backup
+      `jobs.json.bak-20261019T2300Z-asparam`, seul `prompt` changé, vérifié). Le seed `jobs.bootstrap.json` ne porte
+      pas ce prompt. **À vérifier au cycle d'audit suivant (23:50Z+)** : le bot lit l'inbox de la lane (30 non-lus
+      annoncés par roo-extensions) sans erreur d'identité, et ses DM C5 partent signés hermes-agent.
 - [x] Attestation anti-dérive Z.AI claudish#81 (fire 04:30Z, 18/10) : scan complet du siège (`.env`, `.env.secrets` ×2,
       `config.yaml`, `~/.claude/settings.json`) → **aucune clé Z.AI directe**. Le seul identifiant nommé `GLM_API_KEY`
       (volume `.env` L18) porte la VALEUR de `CLAUDISH_PROXY_KEY` (fp sha256[:12] `6302afdcc061`, identique aux
