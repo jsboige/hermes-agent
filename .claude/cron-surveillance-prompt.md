@@ -270,12 +270,15 @@ Sinon : PAS d'escalade.
 
 ## Self-re-arm (FIN, obligatoire)
 
-Les CronCreate **expirent à 7j** ET **meurent à la fermeture de la session Claude Code**.
-1. `CronList` → note le/les job ID(s) de surveillance existant(s).
+Les CronCreate **expirent à 7j** ET **meurent à la fermeture de la session Claude Code** — mais PAS au reboot
+machine/Docker : la session survit, et son cron avec elle (incident 19/10 01:54Z : deux reprises post-reboot ont
+créé un cron chacune sans lister d'abord → **3 jobs identiques**, triple fire à venir, corrigé).
+1. `CronList` → note le/les job ID(s) de surveillance existant(s). **Toujours, même sur une reprise.**
 2. `CronDelete` de CHACUN (y compris celui qui te fait fire maintenant).
 3. `CronCreate(cron: "23 */3 * * *", prompt: "/surveillance", recurring: true)`.
-4. Note le **nouveau job ID** dans le post `[STATUS 3h]`.
-Il doit toujours y avoir **exactement 1** job de surveillance.
+4. `CronList` → confirme exactement 1, et note le **nouveau job ID** dans le post `[STATUS 3h]`.
+Il doit toujours y avoir **exactement 1** job de surveillance. **Signature du défaut : deux `/surveillance` à ~1 min
+d'écart** — ne PAS réexécuter le cycle, faire CronList et nettoyer les surnuméraires.
 
 ## Fin de session
 
