@@ -24,8 +24,9 @@ Lis en parallèle :
 - `roosync_dashboard(action: "read", type: "workspace", workspace: "cluster-coordination", section: "all", intercomLimit: 10)`
 - `roosync_dashboard(action: "read", type: "global", intercomLimit: 10)`
 - le registre `memory/user-question-registry.md` (questions ouvertes au user)
+- l'**inbox RooSync du siège** : `roosync_messages(action: "inbox", status: "unread")` — ne traiter QUE les messages adressés à `myia-ai-01:hermes-agent` (les `[MENTION]` adressés à `myia-ai-01` seul appartiennent aux autres lanes : ne pas y toucher). Le bot ne peut PAS lire ces messages (derrière le proxy il sert l'inbox `myia-ai-01:roo-extensions`) : toute TASK de re-review / re-réponse adressée au siège se traite côté harnais (poster sous clusterManager-Myia via le `gh` du conteneur, `env -u GH_TOKEN`), puis répondre au DM et le marquer lu. Précédent 19/10 : TASK c2190, 3 re-reviews posées.
 
-Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, claudish), les réponses user.
+Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, claudish), les réponses user, les TASK en attente dans l'inbox du siège.
 
 ## Vérifications (concises, preuve par commande)
 
