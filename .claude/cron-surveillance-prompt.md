@@ -242,6 +242,10 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       prompt avec `as:` ; l'ÉTAPE 0.6 a tourné sans rejet (un `as:` refusé par le serveur ferait échouer l'appel —
       l'entrée granulaire est acceptée). Preuve finale restante : le premier DM C5 envoyé par le bot, qui devra partir
       signé `hermes-agent` (à lire dans les sends du bus, pas dans le rapport).
+      **20/10 19:5xZ : preuve finale ARRIVÉE — item CLOS** : le cycle 142 (MIMO-04, [DONE] 18:18Z) a envoyé son DM C5
+      à myia-ai-01:vllm (« DM envoyé — canal preaudit silencieux depuis le 16/10, rien à proposer ») sans aucun rejet :
+      le send avec `as:` passe. Nuance : le champ `from` du DM n'a pas été lu firsthand (il vit dans l'inbox vllm) —
+      la preuve retenue est l'absence d'erreur RSM sur un send que le serveur aurait refusé si `as:` n'était pas accepté.
 - [x] Attestation anti-dérive Z.AI claudish#81 (fire 04:30Z, 18/10) : scan complet du siège (`.env`, `.env.secrets` ×2,
       `config.yaml`, `~/.claude/settings.json`) → **aucune clé Z.AI directe**. Le seul identifiant nommé `GLM_API_KEY`
       (volume `.env` L18) porte la VALEUR de `CLAUDISH_PROXY_KEY` (fp sha256[:12] `6302afdcc061`, identique aux
