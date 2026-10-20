@@ -167,6 +167,9 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       rate limit / abuse / auth). Parse PS 0 erreur, dry-run vert (`state not written`). **À vérifier aux fires
       suivants : les ticks `:37` passent** (OK direct ou retry puis OK) ; le corps 403 loggé à la première récidive
       tranche la cause (corrélation :37 à élucider — rien dans le script ne distingue :07 de :37).
+      **Vérifié fire 01:53Z 20/10 : OK** — 23:37Z et 00:37Z verts d'emblée, 01:37Z 403→retry 20 s→vert : le correctif
+      sauve le tick. Le corps 403 est VIDE (GitHub n'en fournit pas, ou le flux est déjà consommé sous PS 5.1) — la cause
+      reste non élucidée mais l'organe est résilient ; item clos, re-ouvrir seulement si un tick :37 avorte aux 3 essais.
 
 - [x] **Course au boot MCP corrigée (fire 01:53Z, 17/10).** Au reboot machine du 16/10, le premier boot (21:12Z) a perdu
       la course : la sonde du restore (tir unique) partait avant que `myia-mcp-proxy` (même hôte) réponde → fallback
@@ -235,6 +238,10 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `jobs.json.bak-20261019T2300Z-asparam`, seul `prompt` changé, vérifié). Le seed `jobs.bootstrap.json` ne porte
       pas ce prompt. **À vérifier au cycle d'audit suivant (23:50Z+)** : le bot lit l'inbox de la lane (30 non-lus
       annoncés par roo-extensions) sans erreur d'identité, et ses DM C5 partent signés hermes-agent.
+      **Vérifié fire 01:53Z 20/10** : le run du cycle 126 (rapport `2026-10-20_00-04-33.md`, dispatch 23:50Z) porte le
+      prompt avec `as:` ; l'ÉTAPE 0.6 a tourné sans rejet (un `as:` refusé par le serveur ferait échouer l'appel —
+      l'entrée granulaire est acceptée). Preuve finale restante : le premier DM C5 envoyé par le bot, qui devra partir
+      signé `hermes-agent` (à lire dans les sends du bus, pas dans le rapport).
 - [x] Attestation anti-dérive Z.AI claudish#81 (fire 04:30Z, 18/10) : scan complet du siège (`.env`, `.env.secrets` ×2,
       `config.yaml`, `~/.claude/settings.json`) → **aucune clé Z.AI directe**. Le seul identifiant nommé `GLM_API_KEY`
       (volume `.env` L18) porte la VALEUR de `CLAUDISH_PROXY_KEY` (fp sha256[:12] `6302afdcc061`, identique aux
