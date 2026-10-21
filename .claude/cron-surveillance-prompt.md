@@ -170,6 +170,15 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       **Vérifié fire 01:53Z 20/10 : OK** — 23:37Z et 00:37Z verts d'emblée, 01:37Z 403→retry 20 s→vert : le correctif
       sauve le tick. Le corps 403 est VIDE (GitHub n'en fournit pas, ou le flux est déjà consommé sous PS 5.1) — la cause
       reste non élucidée mais l'organe est résilient ; item clos, re-ouvrir seulement si un tick :37 avorte aux 3 essais.
+      **21/10 01:2xZ : tour 00:13Z = MISSING (missing=1), cause identifiée** : restart du **daemon Docker** à 00:31:31Z
+      (machine PAS reboôtée — boot 19/10 00:02 ; RestartCount 0 ; les events Docker antérieurs ne survivent pas au
+      restart du daemon). La tournée dispatchée à 00:13:29Z était encore en vol (hub nocturne lent) → tuée net :
+      0 post, 0 `last_run` nouveau, 0 rapport (le cron-output-watchdog ne voit donc RIEN — il ne scanne que les
+      rapports écrits ; seul le tour-watchdog a attrapé le manque, WARN posté sur global 00:49Z, posted=True).
+      Pas de re-fire (spec). Boot de reprise sain : restore identique, identité gh OK, ponts 3/3/3 (correctif
+      course-au-boot validé sur cas réel), cycle audit 148 posté 01:07Z. RAM hôte 9,1 Go après recharge des voisins.
+      Leçon : un restart du daemon Docker tue les runs bot en vol SANS trace dans les rapports — croiser
+      `State.StartedAt` du conteneur avec les `last_dispatch` sans `last_run` avant d'invoquer le bus ou le prompt.
 
 - [x] **Course au boot MCP corrigée (fire 01:53Z, 17/10).** Au reboot machine du 16/10, le premier boot (21:12Z) a perdu
       la course : la sonde du restore (tir unique) partait avant que `myia-mcp-proxy` (même hôte) réponde → fallback
