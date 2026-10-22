@@ -130,7 +130,10 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       le prompt ni dans le volume (repris d'une REPLY de pair). Vérifié fire 10:53Z : le run 08:05Z porte le prompt
       v1.2 et écrit « pool 437 open recoupé » ; aucune promotion depuis (chaîne couverte), donc la forme `#N … pages P`
       reste à voir sur la première promotion.
-- [ ] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2
+- [x] Watchdogs hôte (review, cron-output, MCP) remappés `C:\Users\jsboi` → `C:\Users\MYIA` (Phase 2 — **TICKÉ au fire 22:33Z 22/10** :
+      les TROIS sont enregistrés sur ai-01 et verts à chaque fire (`Hermes-Review-Watchdog`, `Hermes-CronOutput-Watchdog`,
+      `Hermes-ClusterTour-Watchdog`, `LastTaskResult=0x0` mesuré à chacun depuis le 16/10) ; le watchdog MCP reste
+      volontairement NON enregistré (décision tranchée 16/10, cf. infra). Plus aucun cran de mise en place ici.
       runbook ; vérifier collisions `NanoClaw-Watchdog`, `MCP-Chain-Watchdog` ; dry-run d'abord).
       14/10 : chemins en `$env:USERPROFILE` (c34288cde2), aucune tâche `Hermes-*` sur ai-01 (pas de collision).
       `Hermes-CronOutput-Watchdog` enregistré le 14/10 19:34Z (non élevé, :11/:41 ; sans token Telegram il ne fait que
@@ -223,7 +226,7 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       ligne `auxiliary:` (le restore strippe tout à partir de là — règle de placement conservée au runbook).
       À chaque fire jusqu'à stabilisation : `grep -c disabled_toolsets config.yaml` = 0 ET 0 SEARCH-DUMP dans
       `cron-output-watchdog.log`.
-- [ ] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
+- [x] Pré-audit (fil global vllm 17:19Z) : le bot n'a reçu AUCUN dossier `[nb-preaudit]` depuis le 14/10 (0 sur 824
       messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide). Demandé au producteur où il livre ; proposé
       `myia-ai-01:hermes-agent`. vllm a re-pointé son livreur (PR vllm#119, 15/10 23:2xZ) ; son probe
       `nbpre-probe-feb508221221` est bien arrivé dans l'inbox du siège (sha256 vérifié 16/10 ~02:00Z).
@@ -255,6 +258,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       à myia-ai-01:vllm (« DM envoyé — canal preaudit silencieux depuis le 16/10, rien à proposer ») sans aucun rejet :
       le send avec `as:` passe. Nuance : le champ `from` du DM n'a pas été lu firsthand (il vit dans l'inbox vllm) —
       la preuve retenue est l'absence d'erreur RSM sur un send que le serveur aurait refusé si `as:` n'était pas accepté.
+      **TICKÉ au fire 22:33Z 22/10 (côté SIÈGE)** : le volet siège est soldé (RX105 déployé + `as:` prouvé). Ce qui reste
+      n'est PAS un cran du siège mais une **veille sur le producteur** : vllm ne livre aucun dossier `[nb-preaudit]`
+      (0 sur ~830 messages de l'inbox du siège, `/opt/data/tmp/preaudit/` vide, constat répété à chaque cycle d'audit —
+      les DONE récents disent « pas de dossier preaudit ce cycle »). Aucun geste possible ici : la livraison appartient
+      à la lane vllm. Réouvrir seulement si un dossier arrive et qu'il n'est pas traité.
 - [x] Attestation anti-dérive Z.AI claudish#81 (fire 04:30Z, 18/10) : scan complet du siège (`.env`, `.env.secrets` ×2,
       `config.yaml`, `~/.claude/settings.json`) → **aucune clé Z.AI directe**. Le seul identifiant nommé `GLM_API_KEY`
       (volume `.env` L18) porte la VALEUR de `CLAUDISH_PROXY_KEY` (fp sha256[:12] `6302afdcc061`, identique aux
