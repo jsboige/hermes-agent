@@ -85,6 +85,13 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 État courant tenu dans le post `[STATUS 3h]` (cases à cocher). Prends le premier item actionnable non
 bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise).
 
+- [x] **Backup GDrive ciblé (mandat user 23/10, commit `425cce8d7c`)** : `hermes-backup-essentials.ps1` — au fire
+      **01:53Z de chaque jour** : passe essentielle (memories/SOUL/skills/config/`.env*`/jobs.json, ~1 Mo gz, rotation 14) ;
+      au fire **01:53Z du dimanche** : ajouter `-Weekly` (state.db gz ~226 Mo, rotation 4). Destination
+      `G:\Mon Drive\Synchronisation\RooSync\hermes-backups\`. PAS de tars volumineux (parole user). Vérifier la sortie
+      `[OK] essentials` + sha256 ; si G: indisponible : consigner et retenter au fire suivant (question au registre si
+      2 fires consécutifs échouent). Bonus trouvé en déployant : le shim boot 012 produisait des archives VIDES de
+      155 o depuis le 14/10 (corrigé en 014, effectif au prochain rebuild).
 - [ ] Telegram token (Q1 registre user) → puis `hermes-restore.ps1` + vérifier `Telegram state` PASS,
       PUIS rebasculer la livraison des 4 jobs : `hermes cron edit <id> --deliver telegram:-1003904676273`
       (passés en `local` le 14/10 : sans credentials Telegram, le preflight du scheduler BLOQUE tout job
