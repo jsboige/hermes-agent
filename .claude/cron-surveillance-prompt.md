@@ -75,6 +75,17 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 5. **Telegram** : `grep -c '^TELEGRAM_BOT_TOKEN=.\+' C:\Users\MYIA\.hermes\.env.secrets` ; si 1, état
    plateforme dans `gateway_state.json` (`platforms.telegram.state` = connected). Tant que 0 : Q1 du
    registre reste ouverte (ne pas re-poser au fil).
+   **INSTRUMENTS AVEUGLES (mesuré 23/10)** : ni `gateway_state.json` ni `docker logs` ne disent la vérité ici.
+   (a) `gateway_state.json` est resté figé au **14/10 11:18:32Z** (`updated_at`, `writer_pid 171`) et ne liste que
+   `platforms: ['api_server']` **alors que Telegram tournait** — le fichier n'est pas réécrit sur ce siège : une
+   absence de clé `telegram` n'est PAS une preuve de non-connexion (le `[FAIL] Telegram state — unknown` de
+   `hermes-restore.ps1` vient de là). (b) `docker logs hermes` ne montre **aucune** ligne d'adaptateur : s6
+   redirige la sortie du service vers des fichiers. **Le seul instrument qui voit** = `gateway.log` :
+   `docker exec -u hermes -e HOME=/opt/data hermes sh -c 'grep -niE "connecting to telegram|telegram connected|Gateway running with|polling confirmed healthy" /opt/data/logs/gateway.log | tail -8'`
+   → attendu `Connecting to telegram...`, `[Telegram] Telegram polling confirmed healthy`, `✓ telegram connected`,
+   `Gateway running with 1 platform(s)`. Contrôle amont (config résolue, pas la config sur disque) : charger
+   `load_gateway_config_for_runner()` dans le conteneur après `load_hermes_dotenv` et vérifier
+   `platforms[TELEGRAM].enabled = True`.
 6. **Bus RooSync (capabilité)** : dernier write du BOT (`myia-ai-01|hermes-agent` hors posts harnais
    `[STATUS 3h]`) sur `workspace-cluster-coordination`. Lire ce que disent les bots (Hermes + NanoClaw) :
    regex `bus down|undelivered|fallback|write failed|no dashboard|MCP.*down|recovery|downgrad`.
@@ -92,12 +103,20 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `[OK] essentials` + sha256 ; si G: indisponible : consigner et retenter au fire suivant (question au registre si
       2 fires consécutifs échouent). Bonus trouvé en déployant : le shim boot 012 produisait des archives VIDES de
       155 o depuis le 14/10 (corrigé en 014, effectif au prochain rebuild).
-- [ ] Telegram token (Q1 registre user) → puis `hermes-restore.ps1` + vérifier `Telegram state` PASS,
-      PUIS rebasculer la livraison des 4 jobs : `hermes cron edit <id> --deliver telegram:-1003904676273`
-      (passés en `local` le 14/10 : sans credentials Telegram, le preflight du scheduler BLOQUE tout job
-      livré sur Telegram avant même de lancer l'agent — `Status: BLOCKED (configuration)`).
-- [x] Jobs bot repris un par un après validation : pr-review, ping-intercom, cluster-tour (14/10). Reste morning-brief
-      (Telegram seul : inutile tant que la livraison est `local`).
+- [x] **Telegram — FAIT 23/10 23:21Z** (commit de la présente routine). Token posé par l'user dans
+      `roosync-cluster/config/.env.secrets` → copié sur le volume → `hermes-restore.ps1` (23 PASS / 4 FAILED,
+      dont `Telegram state — unknown` = instrument aveugle, cf. check 5) → **gateway connecté** :
+      `gateway.log` 23:20:55Z `Connecting to telegram...`, 23:21:07Z `polling confirmed healthy` +
+      `✓ telegram connected`, 23:21:09Z `Gateway running with 1 platform(s)`, 60 commandes enregistrées.
+      Preuve de bout en bout hors gateway : `getMe` → `@MyIAHermesBot`, `sendMessage` → `message_id 24500`
+      dans `-1003904676273`. Les **5 jobs** sont repointés `--deliver telegram:-1003904676273` et
+      `hermes-morning-brief` est **réactivé** (prochain tir 08:00Z). Reste à voir passer **1 livraison réelle**
+      de job (attendu : premier tir pr-review 23:35Z) — `[SILENT]` supprime la livraison (ping-intercom idle
+      ne spamme pas, `cron/scheduler.py:559`), donc un run muet n'est pas un échec.
+      Pourquoi le 14/10 c'était resté `local` : sans credentials le preflight du scheduler BLOQUE tout job livré
+      sur Telegram avant de lancer l'agent — `Status: BLOCKED (configuration)`.
+- [x] Jobs bot repris un par un après validation : pr-review, ping-intercom, cluster-tour (14/10). morning-brief
+      réactivé le 23/10 avec la livraison Telegram.
 - [x] `[ONLINE]` sur global (14/10 11:37Z, puis 17:02Z volet review seul). La cadence NanoClaw est SA décision :
       le 15/10 elle tenait encore les 4 créneaux (fires :03/:17/:31/:47 mesurés par NanoClaw 22:00→04:35Z) et son
       revert attend aussi Telegram. N'écrire « NanoClaw reverté » que sur un post signé NanoClaw qui le dit
