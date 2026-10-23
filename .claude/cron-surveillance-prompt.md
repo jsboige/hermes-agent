@@ -151,6 +151,13 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       (PENDING n'avance pas, OK avance), état remis au tour de 00:13Z (sauvegarde `logs/…-state.json.bak-20261016T1400Z`),
       run réel : `OK` sur le tour de 12:13Z (titre à 12:17:13Z), `OkCount=2`. À chaque fire : le log doit montrer un
       `OK` ou `MISSING` pour chaque tour (00:13Z, 12:13Z), jamais un PENDING suivi seulement de SKIP.
+      **MOTIF CONFIRMÉ 23/10 — la tournée de 12:13Z tombe deux fois de suite :** 22/10 et 23/10 = MISSING,
+      toutes deux par **THREAD-FAIL avant post** (corps de 181 car., `missing required parameters: calls`, mort
+      4-5 min après le dispatch), alors que les DEUX tournées de 00:13Z sont OK. Ce n'est ni le bus ni un
+      prompt-skip : cause = appel d'outil malformé émis par le modèle servi par le hub pendant la fenêtre de
+      cascade de midi (mur MiniMax hebdo jusqu'au 25/10 ; les étapes de repli forment moins bien les 24 outils).
+      À chaque fire qui suit un 12:13Z : lire le verdict du watchdog ET le corps du rapport de tour ; si MISSING,
+      poster la cause mesurée (répondre au WARN) — ne JAMAIS re-firer (spec).
       **Watchdog MCP : NON enregistré, décision tranchée au fire 16:36Z (mesures dans le runbook, Phase 2).**
       (1) Le code de l'image ne laisse plus mourir un pont : après 5 échecs, et dès l'échec de la 1re connexion,
       il parque le serveur et le resonde toutes les 300 s (`_park`, lu dans le code ; 0 parcage dans les logs du
