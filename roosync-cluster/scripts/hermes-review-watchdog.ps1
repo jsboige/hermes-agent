@@ -191,27 +191,31 @@ function Invoke-GhGraphQL {
 # a stale one says nothing about the current window and must not mask an outage.
 function Get-RestMarkedReview {
     if (-not (Test-Path $PrReviewReportsDir)) { return $null }
-    $report = Get-ChildItem $PrReviewReportsDir -Filter *.md -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if ($null -eq $report) { return $null }
-    if (($now - $report.LastWriteTimeUtc).TotalHours -gt 3) { return $null }
-    $raw = Get-Content $report.FullName -Raw
-    $idx = $raw.LastIndexOf('## Response')
-    if ($idx -lt 0) { return $null }
-    # "#22390 REQUEST_CHANGES (CoursIA, ..." — PR number, then a repo word nearby.
-    # The report body embeds the job prompt (full of example PR numbers), so only
-    # the section AFTER the last '## Response' heading is parsed.
+    $reports = Get-ChildItem $PrReviewReportsDir -Filter *.md -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3
+    if ($null -eq $reports) { return $null }
+    # 2026-10-24 22:37Z: the NEWEST report can be an abort whose Response names no
+    # PR, leaving the cross-check with no candidates while reviews exist — try the
+    # next reports (same < 3 h freshness rule) until one yields candidates.
     $candidates = @()
-    foreach ($m in [regex]::Matches($raw.Substring($idx), '#(\d{4,6})([^\r\n]{0,60})')) {
-        $pr = $m.Groups[1].Value
-        $tail = $m.Groups[2].Value
-        $repo = "jsboige/CoursIA"
-        if ($tail -match 'Argumentum') { $repo = "jsboige/Argumentum" }
-        elseif ($tail -match 'roo-extensions') { $repo = "jsboige/roo-extensions" }
-        elseif ($tail -match 'mcp') { $repo = "jsboige/jsboige-mcp-servers" }
-        $key = "$repo#$pr"
-        if ($candidates -notcontains $key) { $candidates += $key }
+    foreach ($report in @($reports)) {
+        if (($now - $report.LastWriteTimeUtc).TotalHours -gt 3) { continue }
+        $raw = Get-Content $report.FullName -Raw
+        $idx = $raw.LastIndexOf('## Response')
+        if ($idx -lt 0) { continue }
+        foreach ($m in [regex]::Matches($raw.Substring($idx), '#(\d{4,6})([^\r\n]{0,60})')) {
+            $pr = $m.Groups[1].Value
+            $tail = $m.Groups[2].Value
+            $repo = "jsboige/CoursIA"
+            if ($tail -match 'Argumentum') { $repo = "jsboige/Argumentum" }
+            elseif ($tail -match 'roo-extensions') { $repo = "jsboige/roo-extensions" }
+            elseif ($tail -match 'mcp') { $repo = "jsboige/jsboige-mcp-servers" }
+            $key = "$repo#$pr"
+            if ($candidates -notcontains $key) { $candidates += $key }
+        }
+        if ($candidates.Count -gt 0) { break }
     }
+    if ($candidates.Count -eq 0) { return $null }
     $freshest = $null
     foreach ($c in ($candidates | Select-Object -First 2)) {
         $parts = $c -split '#'
@@ -327,6 +331,19 @@ if ($wouldAlert) {
     # REST before crying wolf. A fresher REST finding replaces $latestReview so the
     # summary and the LastReviewSeen state stay truthful.
     $restLatest = Get-RestMarkedReview
+    if (-not $restLatest) {
+        # 2026-10-24 22:37Z: the newest report can be an abort (THREAD-FAIL) whose
+        # Response names no PR, so the cross-check has no candidates — while the
+        # GraphQL view reads 8.8h. A review REST-verified by a PREVIOUS tick
+        # (state.LastReviewSeen, refreshed at most one cooldown-tick ago) is still
+        # evidence and fresher than the wave-blind view.
+        $statePeek = Get-State
+        $prevSeen = ConvertTo-UtcDateTime $statePeek.LastReviewSeen
+        if ($prevSeen -and (($null -eq $latestReview) -or ($prevSeen -gt $latestReview))) {
+            $restLatest = $prevSeen
+            Write-Log "REST cross-check had no candidates (newest report an abort?) — falling back to LastReviewSeen $($prevSeen.ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant)) from a previous tick." "WARN"
+        }
+    }
     if ($restLatest -and (($null -eq $latestReview) -or ($restLatest -gt $latestReview))) {
         $latestReview = $restLatest
         $hoursSince = ($now - $latestReview).TotalHours
@@ -386,8 +403,15 @@ if ($status -eq "ALERT") {
     }
 }
 
+# LastReviewSeen is a HIGH-WATER MARK, not a mirror of this tick's reading: a
+# wave-blind tick must never erase a fresher review a previous tick verified by
+# REST (measured 2026-10-24 22:37Z: the GraphQL 13:46Z overwrote the REST 21:04Z
+# found at 22:07Z, destroying the only fresh evidence before my fallback read it).
+$prevSeen = ConvertTo-UtcDateTime $state.LastReviewSeen
+$seenForState = $latestReview
+if ($prevSeen -and (($null -eq $seenForState) -or ($prevSeen -gt $seenForState))) { $seenForState = $prevSeen }
 Set-State @{
     LastRun        = $now.ToString("o", $Invariant)
     LastAlert      = if ($shouldAlert) { $now.ToString("o", $Invariant) } else { $state.LastAlert }
-    LastReviewSeen = if ($latestReview) { $latestReview.ToString("o", $Invariant) } else { $null }
+    LastReviewSeen = if ($seenForState) { $seenForState.ToString("o", $Invariant) } else { $null }
 }
