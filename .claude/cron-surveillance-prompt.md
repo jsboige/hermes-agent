@@ -96,6 +96,18 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 État courant tenu dans le post `[STATUS 3h]` (cases à cocher). Prends le premier item actionnable non
 bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise).
 
+- [x] **Audit des backups planifiés d'ai-01 (mandat user, fire 04:53Z 24/10)** — lecture seule, posté sur
+      `workspace-nanoclaw` (`hermes-audit-nanoclawbackup-20261024T0453Z`). Les 3 tâches existent ; mesure :
+      · `NanoClawBackup` : `LastTaskResult=1` **mais le log dit réussi** (101 DB, 79 Mo, `integrity: all ok`,
+      7 snapshots, prune OK) — **faux rouge** (l'`exit 1` vient d'après le travail, sous `$ErrorActionPreference='Stop'`) :
+      un rouge qui ment dans le sens rassurant masquera le vrai. Destination `E:\nanoclaw-backups` = **disque LOCAL
+      d'ai-01** (`DisplayRoot` vide) → protège de la corruption, **pas de la perte de machine** (le scénario du mandat).
+      · `RSM-backup-mcp-env-daily` : 0x0, dernier 23/10 09:17, prochain 24/10 09:17 (volet roo-extensions, rien à mesurer de plus ici).
+      · `OWUI-Tenants-Backup-Weekly` : 0x0, dernier 18/10, prochain 25/10 03:15 ; `backups\owui-daily\` contient des
+      **sous-dossiers datés** (2026-10-18, 10-11, 10-05) — un `Get-ChildItem -File` y rend vide à tort, vérifier en `-Directory`.
+      **Règle générale confirmée** : pour un backup, mesurer (a) le code de sortie, (b) le log du travail, (c) la TAILLE
+      et le CONTENU produit, (d) la LOCALISATION (même machine = ne couvre pas la perte machine). Les quatre peuvent
+      diverger — c'est arrivé sur deux lanes le même jour.
 - [x] **Backup GDrive ciblé (mandat user 23/10, commit `425cce8d7c`)** : `hermes-backup-essentials.ps1` — au fire
       **01:53Z de chaque jour** : passe essentielle (memories/SOUL/skills/config/`.env*`/jobs.json, ~1 Mo gz, rotation 14) ;
       au fire **01:53Z du dimanche** : ajouter `-Weekly` (state.db gz ~226 Mo, rotation 4). Destination
