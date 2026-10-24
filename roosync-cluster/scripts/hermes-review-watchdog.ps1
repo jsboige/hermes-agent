@@ -56,6 +56,11 @@ param(
     # NanoClaw shares the login; 100 (the GraphQL page maximum) spans well over the
     # alert threshold at both bots' combined review rate.
     [int]$MaxReviews = 100,
+    # Host-side pr-review reports (same volume as $HostEnvFile). Used ONLY as a
+    # REST cross-check before alerting: the bot's newest report names the PRs it
+    # claims to have reviewed, and REST reads those PRs directly — immune to the
+    # contributions-view lag (see the evaluate block).
+    [string]$PrReviewReportsDir = "$env:USERPROFILE\.hermes\cron\output\hermes-pr-review-ai01",
     # Host volume (persists across container rebuilds) — read tokens here, NOT
     # from the container, so the watchdog works when the container is down.
     [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
@@ -177,6 +182,52 @@ function Invoke-GhGraphQL {
     }
 }
 
+# Third blindness, found 2026-10-24 19:37Z: the GraphQL contributions view ITSELF
+# missed CoursIA reviews for ~5 h (last visible 14:35Z) while REST showed marked
+# reviews at 17:33/17:50/19:01Z — the same CoursIA re-stamp waves that blinded the
+# two PR samplings also lag this view, and CoursIA is where Hermes posts ~all its
+# reviews. Before ALERTing, read the PRs the bot's newest report claims to have
+# reviewed and ask REST directly. Only a report written in the last 3 h counts:
+# a stale one says nothing about the current window and must not mask an outage.
+function Get-RestMarkedReview {
+    if (-not (Test-Path $PrReviewReportsDir)) { return $null }
+    $report = Get-ChildItem $PrReviewReportsDir -Filter *.md -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($null -eq $report) { return $null }
+    if (($now - $report.LastWriteTimeUtc).TotalHours -gt 3) { return $null }
+    $raw = Get-Content $report.FullName -Raw
+    $idx = $raw.LastIndexOf('## Response')
+    if ($idx -lt 0) { return $null }
+    # "#22390 REQUEST_CHANGES (CoursIA, ..." — PR number, then a repo word nearby.
+    # The report body embeds the job prompt (full of example PR numbers), so only
+    # the section AFTER the last '## Response' heading is parsed.
+    $candidates = @()
+    foreach ($m in [regex]::Matches($raw.Substring($idx), '#(\d{4,6})([^\r\n]{0,60})')) {
+        $pr = $m.Groups[1].Value
+        $tail = $m.Groups[2].Value
+        $repo = "jsboige/CoursIA"
+        if ($tail -match 'Argumentum') { $repo = "jsboige/Argumentum" }
+        elseif ($tail -match 'roo-extensions') { $repo = "jsboige/roo-extensions" }
+        elseif ($tail -match 'mcp') { $repo = "jsboige/jsboige-mcp-servers" }
+        $key = "$repo#$pr"
+        if ($candidates -notcontains $key) { $candidates += $key }
+    }
+    $freshest = $null
+    foreach ($c in ($candidates | Select-Object -First 2)) {
+        $parts = $c -split '#'
+        $reviews = Invoke-Gh "repos/$($parts[0])/pulls/$($parts[1])/reviews?per_page=30"
+        if ($null -eq $reviews) { continue }
+        foreach ($rv in @($reviews)) {
+            if ($rv.user.login -ne $BotLogin) { continue }
+            if (-not ([string]$rv.body).Contains($BodyMarker)) { continue }
+            $t = ConvertTo-UtcDateTime $rv.submitted_at
+            if ($null -eq $t) { continue }
+            if ($null -eq $freshest -or $t -gt $freshest) { $freshest = $t }
+        }
+    }
+    return $freshest
+}
+
 # --- setup ---
 
 $ghToken = Get-EnvValue "GH_TOKEN"
@@ -270,17 +321,33 @@ try {
     if ($LASTEXITCODE -eq 0 -and $st -eq "running") { $containerUp = $true }
 } catch { }
 
+$wouldAlert = ($totalOpenPrs -gt 0) -and (($null -eq $hoursSince) -or ($hoursSince -ge $AlertThresholdHours))
+if ($wouldAlert) {
+    # The GraphQL view may be wave-blind (see Get-RestMarkedReview): verify against
+    # REST before crying wolf. A fresher REST finding replaces $latestReview so the
+    # summary and the LastReviewSeen state stay truthful.
+    $restLatest = Get-RestMarkedReview
+    if ($restLatest -and (($null -eq $latestReview) -or ($restLatest -gt $latestReview))) {
+        $latestReview = $restLatest
+        $hoursSince = ($now - $latestReview).TotalHours
+        if ($hoursSince -lt $AlertThresholdHours) {
+            Write-Log "GraphQL contributions view STALE — REST cross-check found a marked review at $($latestReview.ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant)); would-be ALERT downgraded to OK (CoursIA wave blindness)." "WARN"
+            $wouldAlert = $false
+        }
+    }
+}
+
 $status = "OK"
 if ($totalOpenPrs -eq 0) {
     $detail = "no open PRs to review across $($TargetRepos -join ', ')"
 }
-elseif ($null -eq $hoursSince) {
+elseif ($wouldAlert -and $null -eq $hoursSince) {
     $status = "ALERT"
-    $detail = "$totalOpenPrs open PR(s) but no review marked '$BodyMarker' among the $MaxReviews latest reviews of $BotLogin"
+    $detail = "$totalOpenPrs open PR(s) but no review marked '$BodyMarker' among the $MaxReviews latest reviews of $BotLogin (REST cross-check concurs)"
 }
-elseif ($hoursSince -ge $AlertThresholdHours) {
+elseif ($wouldAlert) {
     $status = "ALERT"
-    $detail = "no review in $([Math]::Round($hoursSince,1).ToString($Invariant))h (threshold ${AlertThresholdHours}h) despite $totalOpenPrs open PR(s)"
+    $detail = "no review in $([Math]::Round($hoursSince,1).ToString($Invariant))h (threshold ${AlertThresholdHours}h) despite $totalOpenPrs open PR(s) (REST cross-check concurs)"
 }
 else {
     $detail = "last review $([Math]::Round($hoursSince,1).ToString($Invariant))h ago, $totalOpenPrs open PR(s)"
