@@ -122,7 +122,8 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `✓ telegram connected`, 23:21:09Z `Gateway running with 1 platform(s)`, 60 commandes enregistrées.
       Preuve de bout en bout hors gateway : `getMe` → `@MyIAHermesBot`, `sendMessage` → `message_id 24500`
       dans `-1003904676273`. Les **5 jobs** sont repointés `--deliver telegram:-1003904676273` et
-      `hermes-morning-brief` est **réactivé** (prochain tir 08:00Z). **Livraison de job PROUVÉE** 23:37:47Z :
+      `hermes-morning-brief` est **réactivé** — 1er tir **livré** 24/10 08:09:22Z (`message_id=24551`) :
+      les 5 jobs ont tous livré au moins une fois, le montage est complet. **Livraison de job PROUVÉE** 23:37:47Z :
       `agent.log` → `Job 'hermes-ping-intercom-ai01': delivered to telegram:-1003904676273 via live adapter
       thread=- message_id=24504`. Marqueur à grepper : `delivered to [a-z]+:` / `Delivery failed for job`
       (`cron/scheduler_delivery.py:1839` / `:3174`) — **pas** le mot « deliver » seul, la ligne de boot
