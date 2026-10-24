@@ -24,7 +24,8 @@ else
 fi
 
 # 1. Overwrite model config — claudish proxy route (Phase 2 v3 restored 2026-08-07)
-# Routes via claudish proxy (po-2023:3000): claude-sonnet-4-6 -> gc@glm-5.2.
+# Routes via the claudish hub (po-2025, 192.168.0.50:3000 since 2026-09-05 — NOT
+# po-2023/.46): claude-sonnet-4-6 is a sonnet role name, served as glm-5.3 on 2026-10-14.
 # Auth via x-proxy-key (mandatory since claudish auth hardening 2026-07-10) carried
 # in ANTHROPIC_CUSTOM_HEADERS. This is the prescribed fix from claudish (msg
 # msg-20260807T185007-xvk0jc) after the z.ai-native fallback was rejected by user
@@ -156,23 +157,31 @@ awk '
 # (/v1/messages -> 200; /anthropic/v1/messages -> 404), which the validator
 # rejects. A custom_providers entry carries base_url + transport explicitly and
 # bypasses the native-endpoint validator. Incident 2026-10-07.
+# CLAUDISH_MACHINE (per seat, in .env.secrets) becomes the X-Claudish-Machine header
+# the hub tags each request with. Without it the hub infers the lane from the key,
+# and the ai-01 seat's requests were logged as myia-po-2026 (2026-10-15).
 echo "  -> Pointing main model at claudish hub (custom provider)"
 python3 - "$DATA/config.yaml" << 'PYEOF'
-import sys
+import os, sys
 from ruamel.yaml import YAML
 p = sys.argv[1]
 y = YAML(typ="rt")
 d = y.load(open(p))
 d.setdefault("model", {})["provider"] = "claudish"
 d.pop("custom_providers", None)
-d["custom_providers"] = [{
+entry = {
     "name": "claudish",
     "base_url": "http://192.168.0.50:3000",
     "api_mode": "anthropic_messages",
     "key_env": "ANTHROPIC_TOKEN",
-}]
+}
+machine = os.environ.get("CLAUDISH_MACHINE", "").strip()
+if machine:
+    entry["extra_headers"] = {"X-Claudish-Machine": machine}
+d["custom_providers"] = [entry]
 y.dump(d, open(p, "w"))
-print("     model.provider=claudish + custom_providers entry")
+print("     model.provider=claudish + custom_providers entry"
+      + (f" (X-Claudish-Machine: {machine})" if machine else " (no CLAUDISH_MACHINE: hub infers the lane)"))
 PYEOF
 
 # Require secrets — NO hardcoded fallbacks
@@ -217,21 +226,40 @@ stt:
 EOF
 
 # 3b. MCP servers — detect if ai-01 proxy is available, fallback to local
+# Boot race (measured ai-01 2026-10-16 21:12Z): hermes and the proxy container
+# start together after a machine reboot; a single-shot probe can fire before the
+# proxy answers, flipping the seat onto the local fallback — which is broken
+# wherever /opt/roo-state-manager is not mounted (degraded ~2h until a manual
+# restart). Retry: the proxy is same-host on ai-01 and wins every real race;
+# the delay only costs boots where it is genuinely down.
 MCP_PROXY_UP=false
 if command -v curl &>/dev/null; then
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
-       "http://192.168.0.47:9090/sk-agent/mcp" \
-       -H "Authorization: Bearer ${MCP_AUTH}" \
-       -H "Content-Type: application/json" \
-       -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
-       --connect-timeout 5 --max-time 10 2>/dev/null || true)
-    case "$HTTP_CODE" in
-        200|401|403|405) MCP_PROXY_UP=true ;;
-    esac
+    for _attempt in 1 2 3 4 5 6 7 8 9; do
+        HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+           "http://192.168.0.47:9090/sk-agent/mcp" \
+           -H "Authorization: Bearer ${MCP_AUTH}" \
+           -H "Content-Type: application/json" \
+           -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"probe","version":"1.0"}}}' \
+           --connect-timeout 5 --max-time 10 2>/dev/null || true)
+        case "$HTTP_CODE" in
+            200|401|403|405) MCP_PROXY_UP=true; break ;;
+        esac
+        sleep 10
+    done
 fi
 
-if [ "$MCP_PROXY_UP" = true ]; then
-    echo "  -> MCP proxy (192.168.0.47:9090) reachable — using remote"
+# A seat without the /opt/roo-state-manager mount (ai-01) can NEVER run the
+# local fallback — there is no source to copy. Point it at the proxy anyway:
+# the gateway parks a failed MCP server and self-probes every 300 s
+# (tools/mcp_tool_server_run.py), so the bridges heal by themselves once the
+# proxy returns. Only a seat that carries the mount (po-2026) keeps the local
+# fallback.
+if [ "$MCP_PROXY_UP" = true ] || [ ! -d /opt/roo-state-manager ]; then
+    if [ "$MCP_PROXY_UP" = true ]; then
+        echo "  -> MCP proxy (192.168.0.47:9090) reachable — using remote"
+    else
+        echo "  -> MCP proxy unreachable but /opt/roo-state-manager absent — writing remote URLs anyway (bridges self-probe every 300s)"
+    fi
     cat >> "$DATA/config.yaml" << EOF
 
 # MCP servers — LAN direct to ai-01 proxy
@@ -380,13 +408,20 @@ GLM_BASE_URL="$GLM_BASE_URL"
 # Auth: claudish accepts Hermes's native x-api-key header (a third-party anthropic
 # endpoint makes build_anthropic_client send api_key as x-api-key). x-proxy-key is
 # NOT required on /v1/messages — proven by a direct probe (HTTP 200 + glm-5.2 body)
-# and an end-to-end `hermes -z` returning a correct, instruction-following reply.
+# and an end-to-end 'hermes -z' returning a correct, instruction-following reply.
+# (No backticks in this heredoc: it is unquoted, so they would EXECUTE the command.)
 # NOTE: ANTHROPIC_CUSTOM_HEADERS is NOT read by Hermes (grep across .py = 0 refs),
 # so x-proxy-key cannot be sent via env regardless; if claudish later enforces it,
 # a custom_providers block (transport: anthropic_messages + extra_headers) is the
 # only mechanism. NEVER log the key.
+# UPDATE 2026-10-14 (ai-01 seat): the hub now ENFORCES the proxy key — a request
+# with x-api-key=placeholder gets 401 "keyless request for claude-sonnet-4-6
+# resolves to a server-held credential (glm-5.3) — proxy key required". Probed:
+# the hub accepts the fleet proxy key as x-proxy-key OR as x-api-key, so the
+# custom provider's key_env (ANTHROPIC_TOKEN -> x-api-key) carries it. The alias
+# now resolves to glm-5.3.
 ANTHROPIC_BASE_URL=http://192.168.0.50:3000
-ANTHROPIC_TOKEN=placeholder
+ANTHROPIC_TOKEN=${CLAUDISH_PROXY_KEY:-placeholder}
 
 # Telegram bot
 TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
@@ -437,8 +472,10 @@ for job in data.get('jobs', []):
     # Remove toolset restrictions — cluster crons need full access
     if 'enabled_toolsets' in job:
         del job['enabled_toolsets']
-    # Re-enable paused jobs
-    if job.get('enabled') is False:
+    # Re-enable paused jobs — except an explicit operator hold (paused_reason
+    # prefixed 'operator-hold:'), which only the operator lifts. This script runs
+    # on every boot, so without the exception a deliberate hold dies at restart.
+    if job.get('enabled') is False and not str(job.get('paused_reason') or '').startswith('operator-hold:'):
         job['enabled'] = True
         job.pop('paused_at', None)
         job.pop('paused_reason', None)
@@ -743,23 +780,37 @@ else
 fi
 
 # 7c. gh auth login with GH_TOKEN (persists to /opt/data so it survives restarts)
+# The agent's terminal strips GH_TOKEN/GITHUB_TOKEN (Tier-1, local_env_policy.py), so
+# the bot's gh only authenticates through a STORED login: hosts.yml in the hermes
+# user's config dir ($HOME=/opt/data). `gh auth login` refuses to store anything
+# while GH_TOKEN is set (sourced from .env.secrets above), and the old `|| true`
+# plus a `gh auth status` that read that same GH_TOKEN reported a false success.
+# Measured on the ai-01 seat 2026-10-14: .config/gh empty and root-owned, the bot
+# found gh unauthenticated and posted an audit under GH_TOKEN_JSBOIGE (the
+# operator's PERSONAL account on that seat).
 echo "  -> Configuring gh CLI auth"
 GH_TOKEN_VAL="${GH_TOKEN_CLUSTERMANAGER:-}"
+GH_CFG=/opt/data/.config/gh
+gh_stored_login() { env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$GH_CFG" gh api user --jq .login 2>/dev/null; }
 if [ -n "$GH_TOKEN_VAL" ]; then
     # Persist gh config to /opt/data so it survives container restarts
-    mkdir -p /opt/data/.config/gh
+    mkdir -p "$GH_CFG"
     ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
-    echo "$GH_TOKEN_VAL" | gh auth login --with-token 2>/dev/null || true
-    if gh auth status &>/dev/null; then
-        echo "  -> gh auth configured (token from GH_TOKEN_CLUSTERMANAGER)"
+    printf '%s\n' "$GH_TOKEN_VAL" | env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$GH_CFG" \
+        gh auth login --hostname github.com --with-token --insecure-storage 2>/dev/null || true
+    chown -R 10000:10000 /opt/data/.config 2>/dev/null || true
+    chmod 700 "$GH_CFG" 2>/dev/null || true
+    GH_LOGIN="$(gh_stored_login)"
+    if [ -n "$GH_LOGIN" ]; then
+        echo "  -> gh auth stored for the bot: $GH_LOGIN (token from GH_TOKEN_CLUSTERMANAGER)"
     else
-        echo "  -> Warning: gh auth login failed"
+        echo "  -> Warning: gh auth login failed (no stored login usable without GH_TOKEN)"
     fi
 else
     # Try reusing existing auth if already in /opt/data/.config/gh
     if [ -d "/opt/data/.config/gh" ]; then
         ln -sf /opt/data/.config/gh /root/.config/gh 2>/dev/null || true
-        if gh auth status &>/dev/null; then
+        if [ -n "$(gh_stored_login)" ]; then
             echo "  -> gh auth restored from /opt/data/.config/gh"
         else
             echo "  -> Warning: GH_TOKEN_CLUSTERMANAGER not set, gh auth not configured"
@@ -833,7 +884,10 @@ chmod 755 /root
 # 7/7 retries (inbox-poll, pr-review). Fix: sitecustomize module that
 # retypes dict thinking blocks into proper ThinkingBlock instances
 # before accumulation. Idempotent: skips if .pth already present.
-SP_DIR="/opt/hermes/.venv/lib/python3.13/site-packages"
+# Resolved from the venv interpreter: the image's Python minor moves with upstream
+# syncs (3.13 -> 3.14 on the 2026-10 ai-01 build) and a hardcoded path aborts the
+# whole restore here under set -e, skipping the verification block.
+SP_DIR="$(/opt/hermes/.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 if [ ! -f "$SP_DIR/zz_claudish_thinking_patch.pth" ]; then
     cat > "$SP_DIR/zz_claudish_thinking_patch.py" <<'ZCEOF'
 """claudish/GLM emits thinking content blocks without the required signature
@@ -987,7 +1041,9 @@ command -v gh &>/dev/null && check "gh CLI" "OK" || check "gh CLI" "not installe
 command -v jq &>/dev/null && check "jq" "OK" || check "jq" "not installed"
 
 # gh auth
-gh auth status &>/dev/null && check "gh auth" "OK" || check "gh auth" "not configured"
+# What the BOT sees: no GH_TOKEN in its terminal, stored login as user hermes.
+GH_BOT_LOGIN="$(su -s /bin/sh hermes -c 'env -u GH_TOKEN -u GITHUB_TOKEN HOME=/opt/data gh api user --jq .login' 2>/dev/null)"
+[ "$GH_BOT_LOGIN" = "clusterManager-Myia" ] && check "gh auth" "OK" || check "gh auth" "bot sees '${GH_BOT_LOGIN:-unauthenticated}', expected clusterManager-Myia"
 
 # gh config persisted
 [ -d "/opt/data/.config/gh" ] && check "gh config persisted" "OK" || check "gh config persisted" "not found in /opt/data"

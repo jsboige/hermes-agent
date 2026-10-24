@@ -8,7 +8,7 @@
     <Principal id="Author">
       <!-- TEMPLATE, not a registerable file as-is. Task Scheduler rejects an empty
            UserId, so no SID is versioned here either: this repo is a public fork and
-           the user SID is an identifier. Deploy with register-cron-output-watchdog.ps1,
+           the user SID is an identifier. Deploy with register-host-watchdog.ps1,
            which resolves the current user's SID at run time and substitutes this token
            (it also runs a dry run unless given -Apply). -->
       <UserId>__USER_SID__</UserId>
