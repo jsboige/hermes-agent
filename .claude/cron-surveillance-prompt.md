@@ -180,13 +180,19 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       (PENDING n'avance pas, OK avance), état remis au tour de 00:13Z (sauvegarde `logs/…-state.json.bak-20261016T1400Z`),
       run réel : `OK` sur le tour de 12:13Z (titre à 12:17:13Z), `OkCount=2`. À chaque fire : le log doit montrer un
       `OK` ou `MISSING` pour chaque tour (00:13Z, 12:13Z), jamais un PENDING suivi seulement de SKIP.
-      **MOTIF CONFIRMÉ 23/10 — la tournée de 12:13Z tombe deux fois de suite :** 22/10 et 23/10 = MISSING,
-      toutes deux par **THREAD-FAIL avant post** (corps de 181 car., `missing required parameters: calls`, mort
-      4-5 min après le dispatch), alors que les DEUX tournées de 00:13Z sont OK. Ce n'est ni le bus ni un
-      prompt-skip : cause = appel d'outil malformé émis par le modèle servi par le hub pendant la fenêtre de
-      cascade de midi (mur MiniMax hebdo jusqu'au 25/10 ; les étapes de repli forment moins bien les 24 outils).
-      À chaque fire qui suit un 12:13Z : lire le verdict du watchdog ET le corps du rapport de tour ; si MISSING,
-      poster la cause mesurée (répondre au WARN) — ne JAMAIS re-firer (spec).
+      **MOTIF RÉVISÉ 24/10 — ce n'est pas la fenêtre de midi, c'est la CASCADE** : 3 tournées consécutives
+      MISSING par **THREAD-FAIL avant post** (12:13Z 22/10, 12:13Z 23/10, **00:13Z 24/10** — cette dernière
+      ROMPT le résumé « 00:13Z saine »). Corps du rapport 24/10 : réponse finale « T#179 … I'm on T#180.
+      Posting to global. » suivie de l'abort 181 car. — mort en ÉTAPE 3 avant l'append, recorded `ok`.
+      Le bon prédicteur n'est pas l'heure du fire mais **l'état de la cascade hub au moment du dispatch** :
+      la nuit 24/10 00:05-00:15Z avait vLLM timeout socket-held, deepseek-v4-flash 200-vide, claude-sonnet-5-5
+      429 (reset 08:39Z), frognano 403 — le notebook-audit 00:12:56Z est mort de la même signature dans la
+      même fenêtre. Les étapes de repli du hub forment mal les 24 outils. Cause racine du hub = correctif
+      confié à po-2023 (Refs #28) ; tant qu'il n'est pas déployé, chaque fire sous cascade est exposé.
+      À chaque fire qui suit un tour : lire le verdict du watchdog ET le corps du rapport ; si MISSING,
+      poster la cause mesurée (répondre au WARN — fait 24/10 01:53Z, `tour-missing-0013-20261024-rootcause`,
+      crossPost Maintenance qui avait testé le bus) — ne JAMAIS re-firer (spec). T#180 sauté, le prochain
+      tour repart sur T#180.
       **Watchdog MCP : NON enregistré, décision tranchée au fire 16:36Z (mesures dans le runbook, Phase 2).**
       (1) Le code de l'image ne laisse plus mourir un pont : après 5 échecs, et dès l'échec de la 1re connexion,
       il parque le serveur et le resonde toutes les 300 s (`_park`, lu dans le code ; 0 parcage dans les logs du
