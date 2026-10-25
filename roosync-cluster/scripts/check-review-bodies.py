@@ -26,6 +26,22 @@ QUERY = """query($login: String!) { user(login: $login) { contributionsCollectio
 LITERAL_PATH = re.compile(r"(^|\s)@(/|[\w.-]+\.(md|txt))")
 
 
+def is_hermes_body(body, marker):
+    """Mirror of Test-HermesBody in hermes-review-watchdog.ps1 — keep in sync.
+
+    The bot drifted off the "[Hermes" header on 2026-10-25 (three live forms,
+    measured 21:09-22:46Z): the contract header, "## Review Hermes (lane ...)"
+    and "## Review Hermes - incrementale ...". A Hermes review quoting the
+    NanoClaw analysis it increments still counts, so NanoClaw exclusion is
+    anchored to the body's first line only.
+    """
+    if not body:
+        return False
+    if body.split("\n", 1)[0].startswith("**[NanoClaw"):
+        return False
+    return marker in body or body.startswith("## Review Hermes")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("since", help="ISO UTC timestamp, e.g. 2026-10-15T01:50:00Z")
@@ -41,7 +57,7 @@ def main():
 
     picked = [n for n in nodes
               if n["pullRequestReview"]["submittedAt"] >= args.since
-              and args.marker in (n["pullRequestReview"]["body"] or "")]
+              and is_hermes_body(n["pullRequestReview"]["body"], args.marker)]
     # A literal-path body carries no marker: check every review of the window for those.
     window = [n for n in nodes if n["pullRequestReview"]["submittedAt"] >= args.since]
 

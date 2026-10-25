@@ -49,6 +49,9 @@ param(
     [string]$BotLogin = "",
     # NanoClaw posts under the same login; only reviews whose body carries this
     # marker are Hermes's. Without it, NanoClaw's reviews would mask a Hermes outage.
+    # NOTE 2026-10-25: the bot drifted to "## Review Hermes (lane myia-ai-01:...)"
+    # on 5/12 reviews of the 21:34-22:46Z window. The alternate marker below
+    # still distinguishes Hermes from NanoClaw (which always tags "[NanoClaw").
     [string]$BodyMarker = "[Hermes",
     [double]$AlertThresholdHours = 4.0,
     [double]$CooldownHours = 4.0,
@@ -164,6 +167,28 @@ function Invoke-Gh {
     }
 }
 
+# Fourth blindness, found 2026-10-25 23:24Z: the bot's body marker DRIFTED.
+# Measured over the 21:09-22:46Z window, three live header forms:
+#   "[Hermes] Review sur le head ..."                      (the contract)
+#   "## Review Hermes (lane myia-ai-01:hermes-agent) ..."  (5 reviews)
+#   "## Review Hermes - incrementale au head ..."          (1 review)
+# Only the first form matched $BodyMarker, so a lane posting 5 reviews/cycle
+# read as silent. Both filters below (GraphQL pick + REST cross-check) go
+# through this predicate.
+# Discrimination against NanoClaw (same login) is by EXPLICIT exclusion:
+# a Hermes review quoting the NanoClaw analysis it increments (#22582,
+# 22:44:42Z) contains the string "[NanoClaw" in its body — that one must
+# still count, hence the exclusion is anchored to the body's first line.
+function Test-HermesBody {
+    param([object]$Body)
+    $s = [string]$Body
+    if (-not $s) { return $false }
+    $firstLine = ($s -split "`r?`n")[0]
+    if ($firstLine.Contains("[NanoClaw")) { return $false }
+    if ($s.Contains($script:BodyMarker)) { return $true }
+    return $s.StartsWith("## Review Hermes")
+}
+
 function Invoke-GhGraphQL {
     param([string]$Query)
     try {
@@ -223,7 +248,7 @@ function Get-RestMarkedReview {
         if ($null -eq $reviews) { continue }
         foreach ($rv in @($reviews)) {
             if ($rv.user.login -ne $BotLogin) { continue }
-            if (-not ([string]$rv.body).Contains($BodyMarker)) { continue }
+            if (-not (Test-HermesBody $rv.body)) { continue }
             $t = ConvertTo-UtcDateTime $rv.submitted_at
             if ($null -eq $t) { continue }
             if ($null -eq $freshest -or $t -gt $freshest) { $freshest = $t }
@@ -296,7 +321,7 @@ if ($null -eq $data -or $null -eq $data.user) {
 foreach ($n in $data.user.contributionsCollection.pullRequestReviewContributions.nodes) {
     $repo = $n.pullRequest.repository.nameWithOwner
     if ($TargetRepos -notcontains $repo) { continue }
-    if (-not ([string]$n.pullRequestReview.body).Contains($BodyMarker)) { continue }
+    if (-not (Test-HermesBody $n.pullRequestReview.body)) { continue }
     $t = ConvertTo-UtcDateTime $n.pullRequestReview.submittedAt
     if ($null -eq $t) { continue }
     if (-not $repoLatest.ContainsKey($repo) -or $t -gt $repoLatest[$repo]) { $repoLatest[$repo] = $t }
