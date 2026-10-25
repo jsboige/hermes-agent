@@ -206,6 +206,14 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       poster la cause mesurée (répondre au WARN — fait 24/10 01:53Z, `tour-missing-0013-20261024-rootcause`,
       crossPost Maintenance qui avait testé le bus) — ne JAMAIS re-firer (spec). T#180 sauté, le prochain
       tour repart sur T#180.
+      **Point de données 25/10 00:13Z = OK** (T#184 posté 00:37:39Z, verdict watchdog OK, ok=15) alors que
+      deux THREAD-FAIL avaient frappé le bot à **22:17Z et 22:25Z** la même soirée. À lire comme une
+      précision du prédicteur, pas comme une contradiction : ce qui expose un tour est l'état du hub
+      **dans la fenêtre de son propre dispatch**, pas quelques heures avant — deux aborts en début de
+      soirée ne présagent rien d'un tour deux heures plus tard, et symétriquement une soirée calme ne
+      protège pas (cf. 00:13Z 24/10 tombé sur une nuit saine par ailleurs). Ne pas extrapoler d'un
+      voisinage temporel : constater le hub à T-10 min, ou accepter le risque et répondre causalement
+      si MISSING.
       **Watchdog MCP : NON enregistré, décision tranchée au fire 16:36Z (mesures dans le runbook, Phase 2).**
       (1) Le code de l'image ne laisse plus mourir un pont : après 5 échecs, et dès l'échec de la 1re connexion,
       il parque le serveur et le resonde toutes les 300 s (`_park`, lu dans le code ; 0 parcage dans les logs du
