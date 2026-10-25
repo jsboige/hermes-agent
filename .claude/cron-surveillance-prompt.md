@@ -380,14 +380,20 @@ Verdict : NOMINAL / WATCH / ALERT / SETUP.
 - Telegram : <token présent ? connected ?>
 - Bus : <dernier write bot>
 - Mise en place : <item avancé ce fire, items restants>
-- Cron harnais : <job ID>
+- Cron harnais : <job ID>  ← **l'ID RÉARMÉ, pas le sortant** : faire le self-re-arm AVANT de poster le STATUS,
+  pour que le post porte le bon ID en un seul message (les 8 fires du 25/10 ont tous posté l'ID sortant puis une
+  [CORRECTION] — ordre inversé, corrigé ici). `CronList` affiche l'heure LOCALE (Paris = UTC+1 depuis le 25/10) et
+  la minute du prochain tir est recalculée à chaque réarmement (dérive :53→:33→:24 mesurée) : citer l'ID et
+  l'intervalle de 3 h, pas une heure absolue devinée.
 ```
 
 ## Escalade (UNIQUEMENT si)
 
 PushNotification + `[WARN]` sur workspace-hermes-agent si l'une de :
 - (a) conteneur down OU restart spiral (> 3 restarts sur la fenêtre)
-- (b) pr-review actif mais aucune review `[Hermes` depuis > 4h
+- (b) pr-review actif mais aucune review `[Hermes` depuis > 4h — **mesurée au sol par REST, jamais sur la seule vue
+  GraphQL contributions** (3ᵉ + 4ᵉ cécités : fenêtre de 100 saturée par les deux bots, part CoursIA figée, marqueur
+  dérivé ; avant le 25/10 23:30Z l'instrument lisait « 0 review » sur une lane qui en postait 15)
 - (c) bus MCP du bot down (patterns check 6, ou aucun write bot > 2h alors que les crons tournent)
 - (d) > 30 % des runs bot en échec silencieux sur les 3 dernières heures
 Sinon : PAS d'escalade.
