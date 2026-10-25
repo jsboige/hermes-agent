@@ -64,6 +64,20 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    NE PAS passer par `search/issues` trié par `updated` : une vague de mises à jour CoursIA (des dizaines de
    PRs en quelques secondes) chasse les reviews fraîches de la fenêtre. Au moins une review récente doit
    porter `[Hermes` (NanoClaw poste sous le même compte avec `[NanoClaw`).
+   **QUATRIÈME CÉCITÉ (corrigée 25/10 23:30Z, commit `d742a34274`)** : le marqueur `[Hermes` n'est pas un champ
+   d'API, c'est un **format de sortie que le modèle peut reformuler**. Mesuré sur 21:09→22:46Z : trois en-têtes
+   vivants — `[Hermes] Review…`, `## Review Hermes (lane myia-ai-01:hermes-agent)…`, `## Review Hermes — incrémentale…`.
+   Seul le premier matchait : une lane qui poste 5 reviews/cycle lisait **0 review** sur 3 h. Deux faits mesurés qui
+   s'additionnent — (a) la fenêtre GraphQL de 100 contributions est saturée par les DEUX bots (~45 reviews/3 h) et
+   sa part CoursIA était figée au **24/10 07:49Z** alors que roo-ext/mcp-servers restaient frais (22:59Z) : la 3ᵉ
+   cécité domine, la dérive de marqueur masque ce qui remonte ; (b) **les PR mergées ne sont PAS évincées de cette
+   vue** (26 MERGED parmi les 100) et #22582 est **open**, pas mergée — une première hypothèse « mergée ⇒ sortie de
+   la vue » a été testée et réfutée, ne pas la recopier. Depuis, les DEUX organes
+   (`check-review-bodies.py` et `hermes-review-watchdog.ps1`) partagent le même prédicat : accepter `[Hermes`
+   n'importe où OU un corps commençant `## Review Hermes`, en **excluant un corps dont la 1ʳᵉ ligne commence
+   `**[NanoClaw`** — ancré première ligne, car une review Hermes incrémentale CITE l'analyse NanoClaw qu'elle
+   prolonge (#22582 22:44:42Z). Preuve : 10/10 reviews réelles classées juste, 5/5 cas de parité, dry-run OK.
+   Ne jamais conclure « 0 review » sur le seul instrument : vérifier au sol par REST avant d'escalader.
    Sur les reviews `[Hermes` depuis le fire précédent : 0 doublon au même `commit_id`, et aucun corps
    < 200 car. ni littéral `@/…` / `@fichier.md`. Le 14/10, un seul run (14:40→14:46Z) a posté 4 corps
    littéraux (#20432, #20656, #20634, #20602 — reposts 15/10 04:43Z) ; un contrôle des seuls doublons ne les
