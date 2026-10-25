@@ -15,7 +15,7 @@
 #   .\register-host-watchdog.ps1 -Watchdog review -Apply   # write launcher + register task
 
 param(
-    [ValidateSet("cron-output", "review", "cluster-tour")]
+    [ValidateSet("cron-output", "review", "cluster-tour", "gdrive-backup")]
     [string]$Watchdog = "cron-output",
     [string]$LauncherDir = "C:\ProgramData\claude-hidden-launchers",
     [int]$IntervalMinutes = 30,
@@ -32,6 +32,10 @@ $organ = @{
     "cron-output"  = @{ TaskName = "Hermes-CronOutput-Watchdog";  StartMinute = 11 }
     "review"       = @{ TaskName = "Hermes-Review-Watchdog";      StartMinute = 7 }
     "cluster-tour" = @{ TaskName = "Hermes-ClusterTour-Watchdog"; StartMinute = 19 }
+    # Daily organ, not a 30-min tick: StartMinute 113 = 01:53 local. The template
+    # carries NO <Repetition> block and the trigger rewrite below skips this organ
+    # entirely, so it stays daily (a 30-min repetition would mean 48 backups/day).
+    "gdrive-backup" = @{ TaskName = "Hermes-GDrive-Backup"; StartMinute = 113; Daily = $true; Script = "hermes-gdrive-backup-daily.ps1" }
 }[$Watchdog]
 $TaskName = $organ.TaskName
 $StartMinute = $organ.StartMinute
@@ -60,7 +64,7 @@ try { [xml]$parsed = $xml } catch { throw "Substituted XML is malformed: $($_.Ex
 Step "xml        : well-formed"
 
 $launcher = Join-Path $LauncherDir "$TaskName.vbs"
-$script = Join-Path $PSScriptRoot "hermes-$Watchdog-watchdog.ps1"
+$script = Join-Path $PSScriptRoot $(if ($organ.Script) { $organ.Script } else { "hermes-$Watchdog-watchdog.ps1" })
 foreach ($p in @($script)) {
     if (-not (Test-Path $p)) { throw "Referenced script missing: $p" }
     Step "script     : OK $p"
@@ -72,7 +76,9 @@ foreach ($p in @($script)) {
 # the organ by ~13h. Stepping by the interval lands on 11:11 today.
 $now = Get-Date
 $triggerStart = $now.Date.AddMinutes($StartMinute)
-while ($triggerStart -le $now) { $triggerStart = $triggerStart.AddMinutes($IntervalMinutes) }
+while ($triggerStart -le $now) {
+    $triggerStart = $(if ($organ.Daily) { $triggerStart.AddDays(1) } else { $triggerStart.AddMinutes($IntervalMinutes) })
+}
 $boundary = $triggerStart.ToString("yyyy-MM-ddTHH:mm:ssK", $Invariant)
 # The schedule is owned HERE, not by the template: substituting only the SID would
 # make this script print a cadence it did not actually register. Scope the interval
@@ -81,13 +87,17 @@ $boundary = $triggerStart.ToString("yyyy-MM-ddTHH:mm:ssK", $Invariant)
 # MatchEvaluator rather than a replacement string: `-replace` with "`$1..." emits a
 # LITERAL `$1` (measured), producing <StartBoundary>$12026-... and a Task Scheduler
 # rejection: "valeur incorrectement formatée ou hors limites (34,19):TimeTrigger".
-$xml = [regex]::Replace($xml, '(<StartBoundary>)[^<]*(</StartBoundary>)', {
-    param($m) $m.Groups[1].Value + $boundary + $m.Groups[2].Value
-})
-$xml = [regex]::Replace($xml, '(<Repetition>\s*<Interval>)[^<]*(</Interval>)', {
-    param($m) $m.Groups[1].Value + "PT${IntervalMinutes}M" + $m.Groups[2].Value
-})
-Step "trigger    : first $boundary, then every ${IntervalMinutes}m"
+if ($organ.Daily) {
+    Step "trigger    : DAILY at $($triggerStart.ToString('HH:mm')) local, first $boundary (StartWhenAvailable catches up after sleep)"
+} else {
+    $xml = [regex]::Replace($xml, '(<StartBoundary>)[^<]*(</StartBoundary>)', {
+        param($m) $m.Groups[1].Value + $boundary + $m.Groups[2].Value
+    })
+    $xml = [regex]::Replace($xml, '(<Repetition>\s*<Interval>)[^<]*(</Interval>)', {
+        param($m) $m.Groups[1].Value + "PT${IntervalMinutes}M" + $m.Groups[2].Value
+    })
+    Step "trigger    : first $boundary, then every ${IntervalMinutes}m"
+}
 Step "action     : wscript.exe //B //Nologo `"$launcher`""
 
 # --- 4. the hidden launcher (SW_HIDE, so no console ever flashes) ---

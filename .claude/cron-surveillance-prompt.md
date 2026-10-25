@@ -122,13 +122,19 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       **Règle générale confirmée** : pour un backup, mesurer (a) le code de sortie, (b) le log du travail, (c) la TAILLE
       et le CONTENU produit, (d) la LOCALISATION (même machine = ne couvre pas la perte machine). Les quatre peuvent
       diverger — c'est arrivé sur deux lanes le même jour.
-- [x] **Backup GDrive ciblé (mandat user 23/10, commit `425cce8d7c`)** : `hermes-backup-essentials.ps1` — au fire
-      **01:53Z de chaque jour** : passe essentielle (memories/SOUL/skills/config/`.env*`/jobs.json, ~1 Mo gz, rotation 14) ;
-      au fire **01:53Z du dimanche** : ajouter `-Weekly` (state.db gz ~226 Mo, rotation 4). Destination
-      `G:\Mon Drive\Synchronisation\RooSync\hermes-backups\`. PAS de tars volumineux (parole user). Vérifier la sortie
-      `[OK] essentials` + sha256 ; si G: indisponible : consigner et retenter au fire suivant (question au registre si
-      2 fires consécutifs échouent). Bonus trouvé en déployant : le shim boot 012 produisait des archives VIDES de
-      155 o depuis le 14/10 (corrigé en 014, effectif au prochain rebuild).
+- [x] **Backup GDrive ciblé (mandat user 23/10, commit `425cce8d7c`)** : `hermes-backup-essentials.ps1` —
+      passe essentielle (memories/SOUL/skills/config/`.env*`/jobs.json, ~1 Mo gz, rotation 14) ; le dimanche UTC
+      ajoute `-Weekly` (state.db gz ~226 Mo, rotation 4). Destination `G:\Mon Drive\Synchronisation\RooSync\hermes-backups\`.
+      PAS de tars volumineux (parole user). **DÉCLENCHEUR PÉRENNE DEPUIS 25/10 23:45Z** : tâche Windows
+      `Hermes-GDrive-Backup` (quotidienne 01:53 locale, `StartWhenAvailable`, non élevée, lanceur VBS caché),
+      script `hermes-gdrive-backup-daily.ps1`, log `roosync-cluster/logs/gdrive-backup.log`. **Ne plus déclencher
+      la passe au fire 01:53Z** : le cron harnais dérive de minute à chaque réarmement (:53→:33→:24 mesuré le 25/10),
+      donc la passe quotidienne avait silencieusement cessé (dernière archive 05:54Z avant rattrapage 23:40Z) — un
+      backup ne doit jamais dépendre de la minute où tombe un cron. Vérifier à chaque fire : archive essentials la
+      plus récente < 26 h ET log `OK produced` (un code de sortie seul peut mentir dans les deux sens), plus
+      `Get-ScheduledTaskInfo Hermes-GDrive-Backup` `LastTaskResult=0x0`. Le dimanche, vérifier aussi l'archive state.
+      Bonus trouvé en déployant : le shim boot 012 produisait des archives VIDES de 155 o depuis le 14/10
+      (corrigé en 014, effectif au prochain rebuild).
 - [x] **Telegram — FAIT 23/10 23:21Z** (commit de la présente routine). Token posé par l'user dans
       `roosync-cluster/config/.env.secrets` → copié sur le volume → `hermes-restore.ps1` (23 PASS / 4 FAILED,
       dont `Telegram state — unknown` = instrument aveugle, cf. check 5) → **gateway connecté** :
