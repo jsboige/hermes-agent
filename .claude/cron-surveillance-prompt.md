@@ -57,6 +57,13 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    `last_dispatch.dispatched_at` récent ET `fire_claim` qui bat = run vivant ; confirmer dans
    `/opt/data/logs/agent.log` (`API call #N … latency=…`). Les `already running — skipping` des slots suivants
    sont bénins — moins de rapports que de slots n'est pas une panne en soi.
+   **Refus partiel non masqué (mesuré 26/10 05:44Z)** : le pr-review 05:44Z rapporte 5/5 avec un avertissement
+   terminal `File-mutation verifier: 1 file edit(s) FAILED` — `write_file /tmp/review_22622.txt` refusé
+   (`HERMES_WRITE_SAFE_ROOT` = `/opt/data` seul). Le bot a utilisé un autre chemin et posté ses reviews.
+   À signaler quand présent ; non bloquant si les reviews sont effectivement postées (vérifier au sol).
+   **Hub en cascade** : le 26/10 au matin le rôle Sonnet de ce siège est servi en fallback (GLM GLM-4.7
+   épuisé → Kimi k3.1-pro) — l'expérience 15/10 (« les étapes de repli forment moins bien les appels d'outils »)
+   s'applique : si une rafale THREAD-FAIL réapparaît, croiser avec le hub AVANT d'incriminer le prompt.
 4. **Reviews postées** (hôte) : les reviews du bot, plus récentes d'abord, tous dépôts, en UN appel :
    `gh api graphql -f query='query { user(login:"clusterManager-Myia") { contributionsCollection { pullRequestReviewContributions(first: 100, orderBy:{direction: DESC}) { nodes { pullRequestReview { submittedAt state body commit { oid } } pullRequest { number repository { nameWithOwner } } } } } } }'`
    Instrument versionné : `python roosync-cluster/scripts/check-review-bodies.py <ISO du fire précédent>`
@@ -132,7 +139,11 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       donc la passe quotidienne avait silencieusement cessé (dernière archive 05:54Z avant rattrapage 23:40Z) — un
       backup ne doit jamais dépendre de la minute où tombe un cron. Vérifier à chaque fire : archive essentials la
       plus récente < 26 h ET log `OK produced` (un code de sortie seul peut mentir dans les deux sens), plus
-      `Get-ScheduledTaskInfo Hermes-GDrive-Backup` `LastTaskResult=0x0`. Le dimanche, vérifier aussi l'archive state.
+      `Get-ScheduledTaskInfo Hermes-GDrive-Backup` `LastTaskResult=0x0` ET **`NextRunTime` non NULL**
+      (leçon 26/10 : le template initial était un `<TimeTrigger>` à tir unique — premier tir réussi,
+      `NextRun` NULL après, demain sans backup ; corrigé en `<CalendarTrigger><DaysInterval>1</DaysInterval>`,
+      commit `700acc5a65`. Un organe fraîchement déployé se vérifie sur **le tir N+1 prévu**, pas sur le
+      premier tir réussi). Le dimanche, vérifier aussi l'archive state.
       Bonus trouvé en déployant : le shim boot 012 produisait des archives VIDES de 155 o depuis le 14/10
       (corrigé en 014, effectif au prochain rebuild).
 - [x] **Telegram — FAIT 23/10 23:21Z** (commit de la présente routine). Token posé par l'user dans
