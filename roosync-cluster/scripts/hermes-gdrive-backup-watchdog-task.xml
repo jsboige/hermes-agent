@@ -30,12 +30,20 @@
     <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
   </Settings>
   <Triggers>
-    <!-- Daily, NOT a repetition interval: the registrar only rewrites the
-         StartBoundary for this organ (a 30-minute <Repetition> would turn a
-         daily backup into 48 runs/day). StartWhenAvailable covers sleep. -->
-    <TimeTrigger>
+    <!-- CalendarTrigger/DaysInterval=1 = DAILY, NOT a repetition interval (a
+         30-minute <Repetition> would turn a daily backup into 48 runs/day).
+         The registrar rewrites the StartBoundary to the next 01:53 at install
+         time. StartWhenAvailable covers sleep.
+         Measured 2026-10-26: this template first shipped a bare <TimeTrigger>,
+         which fires ONCE and leaves NextRunTime=null after that single run -
+         the 01:53 run happened, tomorrow's would never have. DaysInterval is
+         what makes the trigger repeat; a TimeTrigger has none. -->
+    <CalendarTrigger>
       <StartBoundary>2026-10-26T01:53:00+01:00</StartBoundary>
-    </TimeTrigger>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
   </Triggers>
   <Actions Context="Author">
     <Exec>

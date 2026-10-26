@@ -87,12 +87,18 @@ $boundary = $triggerStart.ToString("yyyy-MM-ddTHH:mm:ssK", $Invariant)
 # MatchEvaluator rather than a replacement string: `-replace` with "`$1..." emits a
 # LITERAL `$1` (measured), producing <StartBoundary>$12026-... and a Task Scheduler
 # rejection: "valeur incorrectement formatée ou hors limites (34,19):TimeTrigger".
+# The StartBoundary substitution applies to EVERY organ: a daily template carries
+# a hardcoded date too, and installing it as-is after that date has passed leaves
+# a past-due boundary (with StartWhenAvailable, a catch-up run at once - not what
+# a fresh install wants; without it, a wait until the scheduler rolls it).
+# The Repetition rewrite stays scoped to tick organs - a daily trigger must NOT
+# get a 30-min repetition (48 backups/day).
+$xml = [regex]::Replace($xml, '(<StartBoundary>)[^<]*(</StartBoundary>)', {
+    param($m) $m.Groups[1].Value + $boundary + $m.Groups[2].Value
+})
 if ($organ.Daily) {
     Step "trigger    : DAILY at $($triggerStart.ToString('HH:mm')) local, first $boundary (StartWhenAvailable catches up after sleep)"
 } else {
-    $xml = [regex]::Replace($xml, '(<StartBoundary>)[^<]*(</StartBoundary>)', {
-        param($m) $m.Groups[1].Value + $boundary + $m.Groups[2].Value
-    })
     $xml = [regex]::Replace($xml, '(<Repetition>\s*<Interval>)[^<]*(</Interval>)', {
         param($m) $m.Groups[1].Value + "PT${IntervalMinutes}M" + $m.Groups[2].Value
     })
