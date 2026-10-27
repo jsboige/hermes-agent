@@ -65,6 +65,12 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    un flap hub : ici le provider derrière le rôle est épuisé **pour plusieurs heures**, donc chaque run qui tombe
    dedans meurt et son bilan est perdu — ce n'est pas auto-réparable avant l'heure de reset annoncée. Gratter
    l'horodatage avec `grep -oE "Usage limit reached for [^\"]*" /opt/data/logs/agent.log | tail -1` et l'annoncer.
+   **PIÈGE UTC+8 (corrigé 27/10 soir par claudish, confirmé au log)** : l'horodatage de reset du message est en
+   **UTC+8**, pas UTC — « 2026-10-28 02:45:56 » voulait dire **18:45:56Z le 27/10** (déjà passé quand on l'a lu).
+   Convertir avant d'annoncer une durée, et recouper : `grep -E "^2026-…:.*Usage limit reached"` timestampé —
+   zéro ligne après l'heure de reset convertie = mur levé. Distinguer aussi le **429 par requête** (« Rate limit
+   reached for requests », sans « Usage limit ») : autre limite (RPM du PAYG), même code HTTP — classer sur le
+   texte, pas sur le code.
    Un run peut aussi survivre : `API call #2` après un 429 = le client rejoue et progresse → lire `agent.log`,
    ne pas conclure du seul rapport d'erreur. Corroboration indépendante utile : les
    `[ERROR] Condensation truncation fallback` de la machine tombent dans la même fenêtre (organe distinct, même amont).
