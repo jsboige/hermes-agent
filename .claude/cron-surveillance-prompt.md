@@ -58,6 +58,16 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses. Un `RUN-ERROR`
    « HTTP 400 … Cannot reach GLM Coding at `https://api.z.ai` » vient du HUB (le bot appelle bien `192.168.0.50:3000`) :
    le hub n'a pas joint z.ai et répond 400, que le client ne rejoue pas (1er cas 15/10 23:06Z, flap hub 23:08Z).
+   **QUOTA 5 h DU RÔLE `sonnet` (mesuré 27/10, distinct des deux précédents)** : la signature est
+   `HTTP 429 … anthropic.RateLimitError: Usage limit reached for 5 hour. Your limit will reset at <horodatage>`
+   — 28 occurrences entre 07:15Z et 17:47Z, avec **7 runs sur 14 en échec (50 %)** sur la fenêtre 14:40→17:53Z,
+   les trois lanes tombant **ensemble** (17:20/17:21/17:34). Ne pas la confondre avec un mur GLM (PAYG) ni avec
+   un flap hub : ici le provider derrière le rôle est épuisé **pour plusieurs heures**, donc chaque run qui tombe
+   dedans meurt et son bilan est perdu — ce n'est pas auto-réparable avant l'heure de reset annoncée. Gratter
+   l'horodatage avec `grep -oE "Usage limit reached for [^\"]*" /opt/data/logs/agent.log | tail -1` et l'annoncer.
+   Un run peut aussi survivre : `API call #2` après un 429 = le client rejoue et progresse → lire `agent.log`,
+   ne pas conclure du seul rapport d'erreur. Corroboration indépendante utile : les
+   `[ERROR] Condensation truncation fallback` de la machine tombent dans la même fenêtre (organe distinct, même amont).
    **Runs longs = hub lent, pas blocage** (mesuré 19/10 : pr-review 08:35Z encore en vol à 10:36Z, appels API à
    7–11 min de latence et 37–48 k tokens de sortie ; audit 08:50Z → 10:37Z, 1 h 47). Avant de suspecter un gel :
    `last_dispatch.dispatched_at` récent ET `fire_claim` qui bat = run vivant ; confirmer dans
