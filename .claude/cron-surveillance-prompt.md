@@ -47,7 +47,13 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    Classer TOUS les rapports depuis le fire précédent, pas seulement le dernier de chaque job : deux autres
    formes d'échec existent depuis le 15/10 — fin sur résultats bruts de recherche web (`N. **titre**` + URL
    indentée, enregistrée `ok`, aucun bilan ni STATUS) et section `## Error` avec traceback (`IndexError` du hub,
-   boucle de répétition, filtre de contenu). Le watchdog cron-output les signale (`SEARCH-DUMP`, `RUN-ERROR`)
+   boucle de répétition, filtre de contenu).
+   **La TAILLE ne classe pas (mesuré 27/10)** : un rapport `RUN-ERROR` pèse 8-12 k car., exactement comme un
+   rapport sain — le pr-review `08:41:33` (11 043 car.) a été déclaré « sain » sur sa seule taille au fire 08:53Z,
+   puis flaggé par le watchdog à 09:11Z. Classer sur la **queue** de chaque rapport (`## Error` / exception,
+   ligne `Response Characters`, marqueur d'abort 181 car., fin en résultats web bruts), jamais sur le poids.
+   Corollaire : le watchdog saute un rapport modifié dans les 2 dernières minutes ; un rapport vu au fire N peut
+   n'être verdicté qu'au tick N+1 — ne pas conclure « sain » sur un rapport tout frais sans avoir lu sa queue. Le watchdog cron-output les signale (`SEARCH-DUMP`, `RUN-ERROR`)
    depuis le 15/10 ; avant, il en était aveugle (5 échecs sur 14 runs en 3 h, log « OK »). Cause d'une rafale :
    croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses. Un `RUN-ERROR`
    « HTTP 400 … Cannot reach GLM Coding at `https://api.z.ai` » vient du HUB (le bot appelle bien `192.168.0.50:3000`) :
