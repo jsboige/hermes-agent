@@ -99,8 +99,11 @@ param(
 $ErrorActionPreference = "Stop"
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
-# Exact marker the framework prints when the model emits an unusable tool call.
-$ThreadFailMarker = 'missing required parameters: calls'
+# Marker the framework prints when the model emits an unusable tool call. The tool
+# name and the missing-parameter list vary by model output (measured: "tool_call"/
+# calls 08/10, "vision_analyze"/question 28/10 01:31Z — missed by the literal form):
+# match the class shape, not the founding incident's exact string.
+$ThreadFailMarker = 'failed: missing required parameters:'
 # Scheduler error section: the heading, then a Python traceback.
 $RunErrorPattern = '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)'
 # One raw search hit: "N. **title**" then an indented URL. GitHub URLs are excluded
