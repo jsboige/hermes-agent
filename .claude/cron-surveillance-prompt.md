@@ -48,6 +48,11 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    formes d'échec existent depuis le 15/10 — fin sur résultats bruts de recherche web (`N. **titre**` + URL
    indentée, enregistrée `ok`, aucun bilan ni STATUS) et section `## Error` avec traceback (`IndexError` du hub,
    boucle de répétition, filtre de contenu).
+   **Dater un run = le NOM du fichier (UTC), JAMAIS `LastWriteTime` (heure LOCALE, UTC+1) — mesuré 29/10.** Le
+   nom `2026-10-29_00-06-07.md` = fin de run à 00:06:07Z ; `LastWriteTime` lisait 01:06. Sélectionner la fenêtre
+   en comparant les NOMS au fire précédent, pas `-newermt`/`LastWriteTime` : en triant sur le mtime on attribue
+   une heure d'avance à chaque échec et on peut croire un run mort 30 min après son véritable rétablissement.
+   Croiser `cron.scheduler` dans `agent.log` (`Job '<x>' failed/completed`, horodaté UTC) qui tranche.
    **La TAILLE ne classe pas (mesuré 27/10)** : un rapport `RUN-ERROR` pèse 8-12 k car., exactement comme un
    rapport sain — le pr-review `08:41:33` (11 043 car.) a été déclaré « sain » sur sa seule taille au fire 08:53Z,
    puis flaggé par le watchdog à 09:11Z. Classer sur la **queue** de chaque rapport (`## Error` / exception,
