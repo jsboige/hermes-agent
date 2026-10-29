@@ -876,55 +876,182 @@ fi
 # causing Permission denied on terminal, file, and browser tools.
 chmod 755 /root
 
-# 8c. claudish thinking-block SDK patch (2026-08-24 incident)
-# claudish (192.168.0.46) started emitting Anthropic-style thinking
-# content blocks WITHOUT the required `signature` field. The Anthropic
-# SDK's streaming accumulate_event() then leaves event.content_block as
-# a plain dict and crashes on .model_dump() -> every LLM cron failed
-# 7/7 retries (inbox-poll, pr-review). Fix: sitecustomize module that
-# retypes dict thinking blocks into proper ThinkingBlock instances
-# before accumulation. Idempotent: skips if .pth already present.
+# 8c. Anthropic SDK streaming hardening for non-native Anthropic dialects
+# (claudish / GLM / MiniMax). Two incidents, one class.
+#
+# 2026-08-24 (po-2026): claudish emitted thinking content blocks WITHOUT the
+# required `signature` field; the SDK's streaming accumulate_event() then left
+# event.content_block as a plain dict and crashed on .model_dump() -> every LLM
+# cron failed 7/7 retries (inbox-poll, pr-review).
+#
+# 2026-10-29 (ai-01): the same class again, this time NOT limited to thinking.
+# The SDK validates each SSE event against RawMessageStreamEvent; when validation
+# fails it falls back to an UNCHECKED construct, which leaves nested fields as raw
+# dicts -> `AttributeError: 'dict' object has no attribute 'model_dump'` on the
+# FIRST API call of every run (4 runs x 3/3 retries, 15:38Z-16:09Z, pr-review /
+# notebook-audit / ping-intercom). Measured shapes that leave content_block as a
+# dict on SDK 0.87.0: the event JSON carries no `type`, or its `type` disagrees
+# with the SSE `event:` line. A missing/odd FIELD (signature-less thinking,
+# tool_use without input, text without text) is NOT affected.
+#
+# The 08-24 patch retyped dict `thinking` blocks only, so it could not protect the
+# other shapes. This version handles the CLASS: an event that is not a model is
+# rebuilt with construct_type, a block declared as a delta but carrying a block is
+# rebuilt as a block start, and any content_block without model_dump() is rebuilt
+# into a real block (known types get their SDK class, unknown types a permissive
+# model).
+#
+# Written on EVERY boot (not only when the .pth is missing): the file is the
+# patch, the .pth is only the loader. A missing patch must never survive a boot
+# because a loader file was already there.
 # Resolved from the venv interpreter: the image's Python minor moves with upstream
 # syncs (3.13 -> 3.14 on the 2026-10 ai-01 build) and a hardcoded path aborts the
 # whole restore here under set -e, skipping the verification block.
 SP_DIR="$(/opt/hermes/.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
-if [ ! -f "$SP_DIR/zz_claudish_thinking_patch.pth" ]; then
-    cat > "$SP_DIR/zz_claudish_thinking_patch.py" <<'ZCEOF'
-"""claudish/GLM emits thinking content blocks without the required signature
-field; the Anthropic SDK then leaves event.content_block as a plain dict and
-accumulate_event() crashes on .model_dump(). Retype them properly.
+cat > "$SP_DIR/zz_claudish_thinking_patch.py" <<'ZCEOF'
+"""Anthropic SDK streaming hardening for non-native Anthropic dialects
+(claudish / GLM / MiniMax).
+
+Failure class (ai-01, 2026-10-29): the Anthropic SDK validates each SSE event
+against ``RawMessageStreamEvent``. When validation fails it falls back to an
+UNCHECKED construct (``construct_type_unchecked``), which leaves nested fields as
+raw dicts. ``accumulate_event`` then does ``event.content_block.model_dump()`` ->
+``AttributeError: 'dict' object has no attribute 'model_dump'`` and every LLM
+turn of the run dies (3/3 retries), typically on the first API call.
+
+Measured shapes that leave ``content_block`` as a dict (SDK 0.87.0):
+  - the event JSON carries no ``type`` (the SDK back-fills it from the SSE
+    ``event:`` line),
+  - the event JSON ``type`` disagrees with the SSE ``event:`` line.
+Content blocks with a missing/odd field (signature-less ``thinking``,
+``tool_use`` without ``input``, ``text`` without ``text``) are NOT affected.
+
+The first version of this patch (po-2026, 2026-08-24) retyped dict ``thinking``
+blocks only; it could not protect the other block types. This version handles the
+CLASS:
+  1. an event that is not a model is rebuilt with ``construct_type`` (validated),
+  2. an event declared as a delta but carrying a block is rebuilt as a start,
+  3. any remaining ``content_block`` without ``model_dump()`` is rebuilt into a
+     real block (known types get their proper SDK class, unknown types get a
+     permissive model).
 
 Loaded via zz_claudish_thinking_patch.pth in site-packages.
-Operator patch 2026-08-24 (po-2026): incident inbox-poll/pr-review 7/7
-AttributeError after claudish .46 started emitting signature-less thinking.
 """
 import anthropic.lib.streaming._messages as _am
-from anthropic.types import ThinkingBlock
+from anthropic._models import construct_type
+from anthropic.types import (
+    RawMessageStreamEvent,
+    ThinkingBlock,
+    RedactedThinkingBlock,
+    TextBlock,
+    ToolUseBlock,
+)
+
+try:
+    from anthropic.types import ServerToolUseBlock
+except Exception:  # pragma: no cover - older SDKs
+    ServerToolUseBlock = None
+
+try:
+    from pydantic import BaseModel, ConfigDict
+
+    class _LooseBlock(BaseModel):
+        """Permissive block for a content type the SDK does not know."""
+        model_config = ConfigDict(extra="allow")
+        type: str
+
+except Exception:  # pragma: no cover - pydantic always present in practice
+    _LooseBlock = None
+
+
+def _retyped_block(cb):
+    """Build a real content block from a raw dict (or from nothing at all)."""
+    if not isinstance(cb, dict):
+        cb = {}
+    kind = cb.get("type")
+    try:
+        if kind == "thinking":
+            return ThinkingBlock(
+                type="thinking",
+                thinking=cb.get("thinking") or "",
+                signature=cb.get("signature") or "",
+            )
+        if kind == "redacted_thinking":
+            return RedactedThinkingBlock(type="redacted_thinking", data=cb.get("data") or "")
+        if kind == "text":
+            return TextBlock(type="text", text=cb.get("text") or "")
+        if kind == "tool_use":
+            return ToolUseBlock(
+                type="tool_use",
+                id=cb.get("id") or "",
+                name=cb.get("name") or "",
+                input=cb.get("input") if isinstance(cb.get("input"), dict) else {},
+            )
+        if kind == "server_tool_use" and ServerToolUseBlock is not None:
+            return ServerToolUseBlock(
+                type="server_tool_use",
+                id=cb.get("id") or "",
+                name=cb.get("name") or "",
+                input=cb.get("input") if isinstance(cb.get("input"), dict) else {},
+            )
+    except Exception:
+        pass
+    data = dict(cb)
+    data.setdefault("type", "unknown")
+    if _LooseBlock is not None:
+        try:
+            return _LooseBlock(**data)
+        except Exception:
+            pass
+    return TextBlock(type="text", text="")
+
 
 if getattr(_am.accumulate_event, "__name__", "") != "_retyped_accumulate":
     _orig_accumulate = _am.accumulate_event
 
     def _retyped_accumulate(*args, **kwargs):
-        ev = kwargs.get("event") if "event" in kwargs else (args[0] if args else None)
-        cb = getattr(ev, "content_block", None)
-        if isinstance(cb, dict) and cb.get("type") == "thinking":
-            try:
-                ev.content_block = ThinkingBlock(
-                    type="thinking",
-                    thinking=cb.get("thinking") or "",
-                    signature=cb.get("signature") or "",
+        try:
+            if "event" in kwargs:
+                ev = kwargs.get("event")
+            else:
+                ev = args[0] if args else None
+            if ev is not None and not hasattr(ev, "model_dump"):
+                # The SDK handed us a raw dict (its unchecked union fallback). Rebuild it
+                # with validation so the nested content_block becomes a real model.
+                rebuilt = construct_type(type_=RawMessageStreamEvent, value=ev)
+                if "event" in kwargs:
+                    kwargs["event"] = rebuilt
+                elif args:
+                    args = (rebuilt,) + tuple(args[1:])
+                ev = rebuilt
+            cb = getattr(ev, "content_block", None)
+            ev_type = getattr(ev, "type", None)
+            if cb is not None and ev_type == "content_block_delta":
+                # The dialect declares a delta but carries a block: it is a block start.
+                index = getattr(ev, "index", 0) or 0
+                raw = cb if isinstance(cb, dict) else getattr(cb, "model_dump", lambda: {})()
+                rebuilt = construct_type(
+                    type_=RawMessageStreamEvent,
+                    value={"type": "content_block_start", "index": index, "content_block": raw},
                 )
-            except Exception:
-                pass
+                if "event" in kwargs:
+                    kwargs["event"] = rebuilt
+                elif args:
+                    args = (rebuilt,) + tuple(args[1:])
+                ev = rebuilt
+                cb = getattr(ev, "content_block", None)
+                ev_type = getattr(ev, "type", None)
+            if not hasattr(cb, "model_dump"):
+                if isinstance(cb, dict) or ev_type == "content_block_start":
+                    ev.content_block = _retyped_block(cb if isinstance(cb, dict) else {})
+        except Exception:
+            pass
         return _orig_accumulate(*args, **kwargs)
 
     _am.accumulate_event = _retyped_accumulate
 ZCEOF
-    echo "import zz_claudish_thinking_patch" > "$SP_DIR/zz_claudish_thinking_patch.pth"
-    echo "  -> claudish thinking patch installed (sitecustomize)"
-else
-    echo "  -> claudish thinking patch already present"
-fi
+echo "import zz_claudish_thinking_patch" > "$SP_DIR/zz_claudish_thinking_patch.pth"
+echo "  -> Anthropic SDK streaming hardening installed (sitecustomize)"
 
 # 9. Verify everything
 echo ""
