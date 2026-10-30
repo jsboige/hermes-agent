@@ -281,6 +281,14 @@ function Get-LastClusterHealthTimestamp {
     foreach ($f in $files) {
         try {
             $text = Get-Content $f -Raw -Encoding UTF8
+            # A 0-byte file reads as $null under -Raw (PS 5.1) and [regex]::Matches
+            # throws on null input. Measured 29-30/10: two empty condensation archives
+            # (global-2026-10-29T16-51-22.md / 17-12-16.md, 0 bytes on disk, written
+            # during the 29/10 crash window) re-warned at every tick. An empty archive
+            # holds no block by definition — skip it; the verdict draws on global.md
+            # plus every other archive, so one skipped file cannot alone produce a
+            # false MISSING. Read ERRORS (lock race) still hit the catch below.
+            if ([string]::IsNullOrEmpty($text)) { Write-Log "empty archive, no block to scan: $f" "INFO"; continue }
             $pattern = '(?m)^### \[([0-9T:\-\.]+Z)\][^\r\n]*\r?\n([\s\S]*?)(?=^### \[|\z)'
             foreach ($m in [regex]::Matches($text, $pattern)) {
                 $blockBody = $m.Groups[2].Value
