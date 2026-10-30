@@ -21,12 +21,32 @@ $Dest = "G:\Mon Drive\Synchronisation\RooSync\hermes-backups"
 $Stamp = [DateTimeOffset]::UtcNow.ToString("yyyyMMdd-HHmm") + "Z"
 
 if (-not (Test-Path "$Volume\state.db")) { Write-Error "No volume at $Volume"; exit 1 }
-if (-not (Test-Path $Dest)) { New-Item -ItemType Directory -Force $Dest | Out-Null }
+
+# --- destination readiness (boot race, measured 2026-10-30) ---
+# The scheduled task runs with StartWhenAvailable: after a reboot it can fire
+# within minutes, before Google Drive has mounted G:. Measured 12:02Z today:
+# tar wrote a 0-byte archive and exited 1. Wait for the drive, bounded (2 min).
+$DestReady = $false
+for ($i = 1; $i -le 12; $i++) {
+    if (Test-Path $Dest) { $DestReady = $true; break }
+    if ($i -eq 1) { Write-Host "[WAIT] destination not reachable yet: $Dest" }
+    Start-Sleep -Seconds 10
+}
+if (-not $DestReady) {
+    if (-not (Test-Path "G:\")) { Write-Error "Drive G: not mounted after 2 min — destination unreachable"; exit 1 }
+    New-Item -ItemType Directory -Force $Dest | Out-Null
+}
 
 # --- essentials (tar.exe ships with Windows 10+) ---
 $Ess = Join-Path $Dest "hermes-essentials-$Stamp.tar.gz"
 & tar.exe -czf $Ess -C $Volume memories SOUL.md skills config.yaml cron/jobs.json .env.secrets .env
-if ($LASTEXITCODE -ne 0) { Write-Error "tar essentials failed (exit $LASTEXITCODE)"; exit 1 }
+# An exit code is not proof of product: check the archive itself (a 0-byte tar.gz
+# can carry exit 1 — or worse, exit 0). Remove the empty artefact, then fail loudly.
+$EssLen = if (Test-Path -LiteralPath $Ess) { (Get-Item -LiteralPath $Ess).Length } else { -1 }
+if ($LASTEXITCODE -ne 0 -or $EssLen -le 0) {
+    if ($EssLen -eq 0) { Remove-Item -LiteralPath $Ess -Force -ErrorAction SilentlyContinue }
+    Write-Error "tar essentials failed (exit $LASTEXITCODE, product $EssLen B)"; exit 1
+}
 $EssHash = (Get-FileHash $Ess -Algorithm SHA256).Hash.Substring(0, 16)
 Write-Host "[OK] essentials $Stamp -> $(Split-Path -Leaf $Ess) sha256[:16]=$EssHash"
 
@@ -34,7 +54,11 @@ Write-Host "[OK] essentials $Stamp -> $(Split-Path -Leaf $Ess) sha256[:16]=$EssH
 if ($Weekly) {
     $St = Join-Path $Dest "hermes-state-$Stamp.tar.gz"
     & tar.exe -czf $St -C $Volume state.db
-    if ($LASTEXITCODE -ne 0) { Write-Error "tar state failed (exit $LASTEXITCODE)"; exit 1 }
+    $StLen = if (Test-Path -LiteralPath $St) { (Get-Item -LiteralPath $St).Length } else { -1 }
+    if ($LASTEXITCODE -ne 0 -or $StLen -le 0) {
+        if ($StLen -eq 0) { Remove-Item -LiteralPath $St -Force -ErrorAction SilentlyContinue }
+        Write-Error "tar state failed (exit $LASTEXITCODE, product $StLen B)"; exit 1
+    }
     $StHash = (Get-FileHash $St -Algorithm SHA256).Hash.Substring(0, 16)
     Write-Host "[OK] state $Stamp -> $(Split-Path -Leaf $St) sha256[:16]=$StHash"
 }
