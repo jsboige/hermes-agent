@@ -325,3 +325,11 @@ native/fts5_cjk/*.so
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# RooSync seat secrets (NEVER commit)
+.env.secrets
+
+# Agent scratch (disposable scripts/outputs; never part of the image)
+.tmp/
+scratchpad_*
+C:Users*

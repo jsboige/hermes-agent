@@ -30,16 +30,15 @@
     decimals ("722,2h" bug).
 
 .NOTES
-    Deploy as a Windows Scheduled Task on po-2026:
-    - Trigger: every 30 minutes (off-minute, e.g. :07/:37)
-    - Action: powershell -NoProfile -File "C:\dev\hermes-agent\roosync-cluster\scripts\hermes-review-watchdog.ps1"
-    - Run whether user is logged on or not
+    Deploy as a Windows Scheduled Task (every 30 min at :07/:37, hidden launcher):
+    .\register-host-watchdog.ps1 -Watchdog review          # dry run
+    .\register-host-watchdog.ps1 -Watchdog review -Apply
 
     Author: Hermes Agent workspace
 #>
 
 param(
-    [string[]]$TargetRepos = @("jsboige/CoursIA", "jsboige/roo-extensions"),
+    [string[]]$TargetRepos = @("jsboige/CoursIA", "jsboige/roo-extensions", "jsboige/jsboige-mcp-servers"),
     # Resolved from the token identity at run time when left empty. Do NOT hardcode:
     # the token identity has already drifted once. Reviews are currently posted as
     # `clusterManager-Myia` while this watchdog filtered on `jsboige` -> it could
@@ -48,16 +47,32 @@ param(
     # exists to catch, and its ALERT text names a cause (pr-review failing) that the
     # data contradicted.
     [string]$BotLogin = "",
+    # NanoClaw posts under the same login; only reviews whose body carries this
+    # marker are Hermes's. Without it, NanoClaw's reviews would mask a Hermes outage.
+    # NOTE 2026-10-25: the bot drifted to "## Review Hermes (lane myia-ai-01:...)"
+    # on 5/12 reviews of the 21:34-22:46Z window. The alternate marker below
+    # still distinguishes Hermes from NanoClaw (which always tags "[NanoClaw").
+    [string]$BodyMarker = "[Hermes",
     [double]$AlertThresholdHours = 4.0,
     [double]$CooldownHours = 4.0,
-    [int]$MaxPrsPerRepo = 20,
+    # How many of the bot's latest reviews (all repos, newest first) are inspected.
+    # NanoClaw shares the login; 100 (the GraphQL page maximum) spans well over the
+    # alert threshold at both bots' combined review rate.
+    [int]$MaxReviews = 100,
+    # Host-side pr-review reports (same volume as $HostEnvFile). Used ONLY as a
+    # REST cross-check before alerting: the bot's newest report names the PRs it
+    # claims to have reviewed, and REST reads those PRs directly — immune to the
+    # contributions-view lag (see the evaluate block).
+    [string]$PrReviewReportsDir = "$env:USERPROFILE\.hermes\cron\output\hermes-pr-review-ai01",
     # Host volume (persists across container rebuilds) — read tokens here, NOT
     # from the container, so the watchdog works when the container is down.
-    [string]$HostEnvFile = "C:\Users\jsboi\.hermes\.env",
+    [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
     [string]$ReviewChatId = "-1003904676273",
     [string]$ContainerName = "hermes",
     [string]$LogPath = "$PSScriptRoot\..\logs\review-watchdog.log",
-    [string]$StateFile = "$PSScriptRoot\..\logs\review-watchdog-state.json"
+    [string]$StateFile = "$PSScriptRoot\..\logs\review-watchdog-state.json",
+    # Evaluate and log the verdict, but send no alert and write no state.
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
@@ -112,7 +127,9 @@ function Set-State {
 function Send-Telegram {
     param([string]$Text)
     $token = Get-EnvValue "TELEGRAM_BOT_TOKEN"
-    if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN"; return $false }
+    # Write-Log emits on the success stream: inside this function it must go to the
+    # host, or the caller receives @(logline, $false) - a truthy array - as "sent".
+    if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN" | Out-Host; return $false }
     try {
         $body = @{ chat_id = $ReviewChatId; text = $Text; disable_web_page_preview = $true } | ConvertTo-Json
         # PS 5.1 re-encodes a string body to ANSI (cp1252) on send, which breaks
@@ -124,7 +141,7 @@ function Send-Telegram {
         return $true
     }
     catch {
-        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN"
+        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN" | Out-Host
         return $false
     }
 }
@@ -135,9 +152,109 @@ function Invoke-Gh {
         return Invoke-RestMethod -Uri "https://api.github.com/$Path" -Headers $script:GhHeaders -TimeoutSec 20 -ErrorAction Stop
     }
     catch {
-        Write-Log "GitHub API call failed ($Path): $($_.Exception.Message)" "WARN"
+        # Surface GitHub's own explanation when there is one (rate limit / abuse
+        # detection 403s carry a JSON message the bare exception hides).
+        $detail = ""
+        try {
+            $resp = $_.Exception.Response
+            if ($resp) {
+                $sr = New-Object System.IO.StreamReader($resp.GetResponseStream())
+                $detail = " | body: " + $sr.ReadToEnd()
+            }
+        } catch { }
+        Write-Log "GitHub API call failed ($Path): $($_.Exception.Message)$detail" "WARN" | Out-Host
         return $null
     }
+}
+
+# Fourth blindness, found 2026-10-25 23:24Z: the bot's body marker DRIFTED.
+# Measured over the 21:09-22:46Z window, three live header forms:
+#   "[Hermes] Review sur le head ..."                      (the contract)
+#   "## Review Hermes (lane myia-ai-01:hermes-agent) ..."  (5 reviews)
+#   "## Review Hermes - incrementale au head ..."          (1 review)
+# Only the first form matched $BodyMarker, so a lane posting 5 reviews/cycle
+# read as silent. Both filters below (GraphQL pick + REST cross-check) go
+# through this predicate.
+# Discrimination against NanoClaw (same login) is by EXPLICIT exclusion:
+# a Hermes review quoting the NanoClaw analysis it increments (#22582,
+# 22:44:42Z) contains the string "[NanoClaw" in its body — that one must
+# still count, hence the exclusion is anchored to the body's first line.
+function Test-HermesBody {
+    param([object]$Body)
+    $s = [string]$Body
+    if (-not $s) { return $false }
+    $firstLine = ($s -split "`r?`n")[0]
+    if ($firstLine.Contains("[NanoClaw")) { return $false }
+    if ($s.Contains($script:BodyMarker)) { return $true }
+    return $s.StartsWith("## Review Hermes")
+}
+
+function Invoke-GhGraphQL {
+    param([string]$Query)
+    try {
+        $body = [System.Text.Encoding]::UTF8.GetBytes((@{ query = $Query } | ConvertTo-Json -Compress))
+        $r = Invoke-RestMethod -Uri "https://api.github.com/graphql" -Method Post -Headers $script:GhHeaders `
+            -Body $body -ContentType "application/json; charset=utf-8" -TimeoutSec 20 -ErrorAction Stop
+        if ($r.errors) {
+            Write-Log "GitHub GraphQL errors: $(($r.errors | ForEach-Object { $_.message }) -join '; ')" "WARN" | Out-Host
+            return $null
+        }
+        return $r.data
+    }
+    catch {
+        Write-Log "GitHub GraphQL call failed: $($_.Exception.Message)" "WARN" | Out-Host
+        return $null
+    }
+}
+
+# Third blindness, found 2026-10-24 19:37Z: the GraphQL contributions view ITSELF
+# missed CoursIA reviews for ~5 h (last visible 14:35Z) while REST showed marked
+# reviews at 17:33/17:50/19:01Z — the same CoursIA re-stamp waves that blinded the
+# two PR samplings also lag this view, and CoursIA is where Hermes posts ~all its
+# reviews. Before ALERTing, read the PRs the bot's newest report claims to have
+# reviewed and ask REST directly. Only a report written in the last 3 h counts:
+# a stale one says nothing about the current window and must not mask an outage.
+function Get-RestMarkedReview {
+    if (-not (Test-Path $PrReviewReportsDir)) { return $null }
+    $reports = Get-ChildItem $PrReviewReportsDir -Filter *.md -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3
+    if ($null -eq $reports) { return $null }
+    # 2026-10-24 22:37Z: the NEWEST report can be an abort whose Response names no
+    # PR, leaving the cross-check with no candidates while reviews exist — try the
+    # next reports (same < 3 h freshness rule) until one yields candidates.
+    $candidates = @()
+    foreach ($report in @($reports)) {
+        if (($now - $report.LastWriteTimeUtc).TotalHours -gt 3) { continue }
+        $raw = Get-Content $report.FullName -Raw
+        $idx = $raw.LastIndexOf('## Response')
+        if ($idx -lt 0) { continue }
+        foreach ($m in [regex]::Matches($raw.Substring($idx), '#(\d{4,6})([^\r\n]{0,60})')) {
+            $pr = $m.Groups[1].Value
+            $tail = $m.Groups[2].Value
+            $repo = "jsboige/CoursIA"
+            if ($tail -match 'Argumentum') { $repo = "jsboige/Argumentum" }
+            elseif ($tail -match 'roo-extensions') { $repo = "jsboige/roo-extensions" }
+            elseif ($tail -match 'mcp') { $repo = "jsboige/jsboige-mcp-servers" }
+            $key = "$repo#$pr"
+            if ($candidates -notcontains $key) { $candidates += $key }
+        }
+        if ($candidates.Count -gt 0) { break }
+    }
+    if ($candidates.Count -eq 0) { return $null }
+    $freshest = $null
+    foreach ($c in ($candidates | Select-Object -First 2)) {
+        $parts = $c -split '#'
+        $reviews = Invoke-Gh "repos/$($parts[0])/pulls/$($parts[1])/reviews?per_page=30"
+        if ($null -eq $reviews) { continue }
+        foreach ($rv in @($reviews)) {
+            if ($rv.user.login -ne $BotLogin) { continue }
+            if (-not (Test-HermesBody $rv.body)) { continue }
+            $t = ConvertTo-UtcDateTime $rv.submitted_at
+            if ($null -eq $t) { continue }
+            if ($null -eq $freshest -or $t -gt $freshest) { $freshest = $t }
+        }
+    }
+    return $freshest
 }
 
 # --- setup ---
@@ -159,13 +276,24 @@ $script:GhHeaders = @{
 # which is indistinguishable from "the bot never reviews" and is the exact failure
 # this organ was blind to. Failing loudly is the only honest option here.
 if (-not $BotLogin) {
-    $me = Invoke-Gh "user"
+    # 2026-10-19: every :37 tick failed with a transient 403 on /user while every
+    # :07 tick of the same script/token succeeded (5 in a row) - a single-shot
+    # probe here was losing half the ticks. Retry with backoff before aborting.
+    $me = $null
+    foreach ($attempt in 1..3) {
+        $me = Invoke-Gh "user"
+        if ($me -and $me.login) { break }
+        if ($attempt -lt 3) {
+            Write-Log "Login resolution attempt $attempt/3 failed - retrying in 20s." "WARN" | Out-Host
+            Start-Sleep -Seconds 20
+        }
+    }
     if ($me -and $me.login) {
         $BotLogin = $me.login
         Write-Log "Bot login resolved from the token: $BotLogin" "INFO"
     }
     else {
-        Write-Log "Could not resolve the bot login from GH_TOKEN — review detection would match nothing and cry wolf. Aborting." "ERROR"
+        Write-Log "Could not resolve the bot login from GH_TOKEN (3 attempts) — review detection would match nothing and cry wolf. Aborting." "ERROR"
         exit 1
     }
 }
@@ -174,32 +302,41 @@ if (-not $BotLogin) {
 
 $now = [datetime]::UtcNow
 $totalOpenPrs = 0
-$latestReview = $null   # UTC [datetime] of the most recent bot review seen
+$latestReview = $null   # UTC [datetime] of the most recent marked bot review
+$repoLatest = @{}
 $repoSummary = @()
 
+# The bot's own reviews, newest first, across all repos, in ONE call. Any sampling by
+# PR went blind: first the newest OPEN PRs (14/10 22:32Z, "never" for CoursIA 12 min
+# after a Hermes review there), then the PRs the bot reviewed sorted by `updated` -
+# 5788 of them on CoursIA, and one bulk-update wave (15/10 01:53Z, dozens of PRs in
+# seconds) pushed every fresh review out of the window: it read 2.8h while Hermes
+# had reviewed 14 min earlier.
+$data = Invoke-GhGraphQL "query { user(login: `"$BotLogin`") { contributionsCollection { pullRequestReviewContributions(first: $MaxReviews, orderBy: {direction: DESC}) { nodes { pullRequestReview { submittedAt body } pullRequest { repository { nameWithOwner } } } } } } }"
+if ($null -eq $data -or $null -eq $data.user) {
+    # Without the reviews there is no verdict: "no review found" would cry wolf.
+    Write-Log "Could not read the reviews of $BotLogin — no verdict this tick." "ERROR"
+    exit 1
+}
+foreach ($n in $data.user.contributionsCollection.pullRequestReviewContributions.nodes) {
+    $repo = $n.pullRequest.repository.nameWithOwner
+    if ($TargetRepos -notcontains $repo) { continue }
+    if (-not (Test-HermesBody $n.pullRequestReview.body)) { continue }
+    $t = ConvertTo-UtcDateTime $n.pullRequestReview.submittedAt
+    if ($null -eq $t) { continue }
+    if (-not $repoLatest.ContainsKey($repo) -or $t -gt $repoLatest[$repo]) { $repoLatest[$repo] = $t }
+    if ($null -eq $latestReview -or $t -gt $latestReview) { $latestReview = $t }
+}
+
 foreach ($repo in $TargetRepos) {
-    $pulls = Invoke-Gh "repos/$repo/pulls?state=open&sort=created&direction=desc&per_page=$MaxPrsPerRepo"
+    # Open-PR count only: is there anything to review at all? One page, so 100 means 100+.
+    $pulls = Invoke-Gh "repos/$repo/pulls?state=open&per_page=100"
     if ($null -eq $pulls) { $repoSummary += "$repo=(query-failed)"; continue }
     $openCount = @($pulls).Count
     $totalOpenPrs += $openCount
-    $repoLatest = $null
-
-    foreach ($pr in $pulls) {
-        $reviews = Invoke-Gh "repos/$repo/pulls/$($pr.number)/reviews"
-        if ($null -eq $reviews) { continue }
-        foreach ($rv in ($reviews | Where-Object { $_.user.login -eq $BotLogin })) {
-            $t = ConvertTo-UtcDateTime $rv.submitted_at
-            if ($null -eq $t) { continue }
-            if ($null -eq $repoLatest -or $t -gt $repoLatest) { $repoLatest = $t }
-            if ($null -eq $latestReview -or $t -gt $latestReview) { $latestReview = $t }
-        }
-    }
-    # Label names the scan scope on purpose. This only inspects OPEN PRs, so a repo
-    # whose reviewed PRs have since been merged reads "never" - which is true of the
-    # open set but reads like "the bot never reviews here". Naming the scope keeps
-    # that line from being misread as an alarm.
-    $age = if ($repoLatest) { (($now - $repoLatest).TotalHours).ToString("F1", $Invariant) + "h" } else { "never" }
-    $repoSummary += "$repo(open=$openCount,lastBotReviewAmongOpenPrs=$age)"
+    # "none" means none among the bot's $MaxReviews latest reviews, not "never".
+    $age = if ($repoLatest.ContainsKey($repo)) { (($now - $repoLatest[$repo]).TotalHours).ToString("F1", $Invariant) + "h" } else { "none" }
+    $repoSummary += "$repo(open=$(if ($openCount -ge 100) { '100+' } else { $openCount }),lastMarkedReview=$age)"
 }
 
 # --- evaluate ---
@@ -213,17 +350,46 @@ try {
     if ($LASTEXITCODE -eq 0 -and $st -eq "running") { $containerUp = $true }
 } catch { }
 
+$wouldAlert = ($totalOpenPrs -gt 0) -and (($null -eq $hoursSince) -or ($hoursSince -ge $AlertThresholdHours))
+if ($wouldAlert) {
+    # The GraphQL view may be wave-blind (see Get-RestMarkedReview): verify against
+    # REST before crying wolf. A fresher REST finding replaces $latestReview so the
+    # summary and the LastReviewSeen state stay truthful.
+    $restLatest = Get-RestMarkedReview
+    if (-not $restLatest) {
+        # 2026-10-24 22:37Z: the newest report can be an abort (THREAD-FAIL) whose
+        # Response names no PR, so the cross-check has no candidates — while the
+        # GraphQL view reads 8.8h. A review REST-verified by a PREVIOUS tick
+        # (state.LastReviewSeen, refreshed at most one cooldown-tick ago) is still
+        # evidence and fresher than the wave-blind view.
+        $statePeek = Get-State
+        $prevSeen = ConvertTo-UtcDateTime $statePeek.LastReviewSeen
+        if ($prevSeen -and (($null -eq $latestReview) -or ($prevSeen -gt $latestReview))) {
+            $restLatest = $prevSeen
+            Write-Log "REST cross-check had no candidates (newest report an abort?) — falling back to LastReviewSeen $($prevSeen.ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant)) from a previous tick." "WARN"
+        }
+    }
+    if ($restLatest -and (($null -eq $latestReview) -or ($restLatest -gt $latestReview))) {
+        $latestReview = $restLatest
+        $hoursSince = ($now - $latestReview).TotalHours
+        if ($hoursSince -lt $AlertThresholdHours) {
+            Write-Log "GraphQL contributions view STALE — REST cross-check found a marked review at $($latestReview.ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant)); would-be ALERT downgraded to OK (CoursIA wave blindness)." "WARN"
+            $wouldAlert = $false
+        }
+    }
+}
+
 $status = "OK"
 if ($totalOpenPrs -eq 0) {
     $detail = "no open PRs to review across $($TargetRepos -join ', ')"
 }
-elseif ($null -eq $hoursSince) {
+elseif ($wouldAlert -and $null -eq $hoursSince) {
     $status = "ALERT"
-    $detail = "$totalOpenPrs open PR(s) but the bot ($BotLogin) has NEVER posted a review"
+    $detail = "$totalOpenPrs open PR(s) but no review marked '$BodyMarker' among the $MaxReviews latest reviews of $BotLogin (REST cross-check concurs)"
 }
-elseif ($hoursSince -ge $AlertThresholdHours) {
+elseif ($wouldAlert) {
     $status = "ALERT"
-    $detail = "no review in $([Math]::Round($hoursSince,1).ToString($Invariant))h (threshold ${AlertThresholdHours}h) despite $totalOpenPrs open PR(s)"
+    $detail = "no review in $([Math]::Round($hoursSince,1).ToString($Invariant))h (threshold ${AlertThresholdHours}h) despite $totalOpenPrs open PR(s) (REST cross-check concurs)"
 }
 else {
     $detail = "last review $([Math]::Round($hoursSince,1).ToString($Invariant))h ago, $totalOpenPrs open PR(s)"
@@ -231,6 +397,11 @@ else {
 
 $summary = "$status - $detail. Repos: $($repoSummary -join '; '). Container: $(if($containerUp){'up'}else{'DOWN'})."
 Write-Log $summary $(if ($status -eq "ALERT") { "ERROR" } else { "INFO" })
+
+if ($DryRun) {
+    Write-Log "DRY RUN - no alert sent, state not written$(if ($status -eq 'ALERT') { ' (a real run would have alerted, cooldown permitting)' })." "INFO"
+    exit 0
+}
 
 # --- alert (with cooldown) ---
 
@@ -249,16 +420,23 @@ if ($status -eq "ALERT") {
         # send meant a failed delivery (measured 2026-10-09 08:07Z, request timeout)
         # still stamped LastAlert and suppressed the next 4h — the alert was silently
         # lost. A failed send costs nothing to retry: nothing reaches Telegram.
-        $shouldAlert = $sent
-        Write-Log "Alert sent to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
+        $shouldAlert = $sent -eq $true
+        Write-Log "Alert to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
     }
     else {
         Write-Log "Alert suppressed (cooldown ${CooldownHours}h not elapsed since last alert)." "INFO"
     }
 }
 
+# LastReviewSeen is a HIGH-WATER MARK, not a mirror of this tick's reading: a
+# wave-blind tick must never erase a fresher review a previous tick verified by
+# REST (measured 2026-10-24 22:37Z: the GraphQL 13:46Z overwrote the REST 21:04Z
+# found at 22:07Z, destroying the only fresh evidence before my fallback read it).
+$prevSeen = ConvertTo-UtcDateTime $state.LastReviewSeen
+$seenForState = $latestReview
+if ($prevSeen -and (($null -eq $seenForState) -or ($prevSeen -gt $seenForState))) { $seenForState = $prevSeen }
 Set-State @{
     LastRun        = $now.ToString("o", $Invariant)
     LastAlert      = if ($shouldAlert) { $now.ToString("o", $Invariant) } else { $state.LastAlert }
-    LastReviewSeen = if ($latestReview) { $latestReview.ToString("o", $Invariant) } else { $null }
+    LastReviewSeen = if ($seenForState) { $seenForState.ToString("o", $Invariant) } else { $null }
 }

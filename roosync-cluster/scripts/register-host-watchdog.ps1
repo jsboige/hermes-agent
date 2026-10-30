@@ -1,32 +1,45 @@
-# register-cron-output-watchdog.ps1
+# register-host-watchdog.ps1
 #
-# Deploys the silent-cron-failure watchdog as a Windows Scheduled Task.
+# Deploys a Hermes host watchdog as a Windows Scheduled Task.
 #
 # Why a registrar and not just the XML: Task Scheduler rejects an empty <UserId>
 # and this repo is a public fork, so the machine's user SID must not be versioned.
-# hermes-cron-output-watchdog-task.xml is therefore a TEMPLATE carrying the
+# Each hermes-<watchdog>-watchdog-task.xml is therefore a TEMPLATE carrying the
 # __USER_SID__ token; this script resolves the CURRENT user's SID and substitutes
 # it, which also makes the deployment reproduce on any machine.
 #
 # DEFAULTS TO A DRY RUN. Nothing is written or registered without -Apply.
 #
 # Usage:
-#   .\register-cron-output-watchdog.ps1            # dry run: show what would happen
-#   .\register-cron-output-watchdog.ps1 -Apply     # write launcher + register task
+#   .\register-host-watchdog.ps1 -Watchdog review          # dry run: show what would happen
+#   .\register-host-watchdog.ps1 -Watchdog review -Apply   # write launcher + register task
 
 param(
-    [string]$TaskName = "Hermes-CronOutput-Watchdog",
-    [string]$TemplatePath = "$PSScriptRoot\hermes-cron-output-watchdog-task.xml",
+    [ValidateSet("cron-output", "review", "cluster-tour", "gdrive-backup")]
+    [string]$Watchdog = "cron-output",
     [string]$LauncherDir = "C:\ProgramData\claude-hidden-launchers",
     [int]$IntervalMinutes = 30,
-    # Start minute of the cadence. :11/:41 keeps this off :07/:37, used by the
-    # review / MCP / status-collector watchdogs.
-    [int]$StartMinute = 11,
     [switch]$Apply
 )
 
 $ErrorActionPreference = "Stop"
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
+
+# Start minutes are off :00 and distinct per organ: :07/:37 for review, :11/:41
+# for cron-output, :19/:49 for cluster-tour (on po-2026 it shared :07/:37; :19
+# is too early for the :13 tour's 15-min window, so the verdict lands at :49).
+$organ = @{
+    "cron-output"  = @{ TaskName = "Hermes-CronOutput-Watchdog";  StartMinute = 11 }
+    "review"       = @{ TaskName = "Hermes-Review-Watchdog";      StartMinute = 7 }
+    "cluster-tour" = @{ TaskName = "Hermes-ClusterTour-Watchdog"; StartMinute = 19 }
+    # Daily organ, not a 30-min tick: StartMinute 113 = 01:53 local. The template
+    # carries NO <Repetition> block and the trigger rewrite below skips this organ
+    # entirely, so it stays daily (a 30-min repetition would mean 48 backups/day).
+    "gdrive-backup" = @{ TaskName = "Hermes-GDrive-Backup"; StartMinute = 113; Daily = $true; Script = "hermes-gdrive-backup-daily.ps1" }
+}[$Watchdog]
+$TaskName = $organ.TaskName
+$StartMinute = $organ.StartMinute
+$TemplatePath = "$PSScriptRoot\hermes-$Watchdog-watchdog-task.xml"
 
 function Step { param([string]$Text) Write-Host "  $Text" }
 
@@ -51,7 +64,7 @@ try { [xml]$parsed = $xml } catch { throw "Substituted XML is malformed: $($_.Ex
 Step "xml        : well-formed"
 
 $launcher = Join-Path $LauncherDir "$TaskName.vbs"
-$script = Join-Path $PSScriptRoot "hermes-cron-output-watchdog.ps1"
+$script = Join-Path $PSScriptRoot $(if ($organ.Script) { $organ.Script } else { "hermes-$Watchdog-watchdog.ps1" })
 foreach ($p in @($script)) {
     if (-not (Test-Path $p)) { throw "Referenced script missing: $p" }
     Step "script     : OK $p"
@@ -63,7 +76,9 @@ foreach ($p in @($script)) {
 # the organ by ~13h. Stepping by the interval lands on 11:11 today.
 $now = Get-Date
 $triggerStart = $now.Date.AddMinutes($StartMinute)
-while ($triggerStart -le $now) { $triggerStart = $triggerStart.AddMinutes($IntervalMinutes) }
+while ($triggerStart -le $now) {
+    $triggerStart = $(if ($organ.Daily) { $triggerStart.AddDays(1) } else { $triggerStart.AddMinutes($IntervalMinutes) })
+}
 $boundary = $triggerStart.ToString("yyyy-MM-ddTHH:mm:ssK", $Invariant)
 # The schedule is owned HERE, not by the template: substituting only the SID would
 # make this script print a cadence it did not actually register. Scope the interval
@@ -72,13 +87,23 @@ $boundary = $triggerStart.ToString("yyyy-MM-ddTHH:mm:ssK", $Invariant)
 # MatchEvaluator rather than a replacement string: `-replace` with "`$1..." emits a
 # LITERAL `$1` (measured), producing <StartBoundary>$12026-... and a Task Scheduler
 # rejection: "valeur incorrectement formatée ou hors limites (34,19):TimeTrigger".
+# The StartBoundary substitution applies to EVERY organ: a daily template carries
+# a hardcoded date too, and installing it as-is after that date has passed leaves
+# a past-due boundary (with StartWhenAvailable, a catch-up run at once - not what
+# a fresh install wants; without it, a wait until the scheduler rolls it).
+# The Repetition rewrite stays scoped to tick organs - a daily trigger must NOT
+# get a 30-min repetition (48 backups/day).
 $xml = [regex]::Replace($xml, '(<StartBoundary>)[^<]*(</StartBoundary>)', {
     param($m) $m.Groups[1].Value + $boundary + $m.Groups[2].Value
 })
-$xml = [regex]::Replace($xml, '(<Repetition>\s*<Interval>)[^<]*(</Interval>)', {
-    param($m) $m.Groups[1].Value + "PT${IntervalMinutes}M" + $m.Groups[2].Value
-})
-Step "trigger    : first $boundary, then every ${IntervalMinutes}m"
+if ($organ.Daily) {
+    Step "trigger    : DAILY at $($triggerStart.ToString('HH:mm')) local, first $boundary (StartWhenAvailable catches up after sleep)"
+} else {
+    $xml = [regex]::Replace($xml, '(<Repetition>\s*<Interval>)[^<]*(</Interval>)', {
+        param($m) $m.Groups[1].Value + "PT${IntervalMinutes}M" + $m.Groups[2].Value
+    })
+    Step "trigger    : first $boundary, then every ${IntervalMinutes}m"
+}
 Step "action     : wscript.exe //B //Nologo `"$launcher`""
 
 # --- 4. the hidden launcher (SW_HIDE, so no console ever flashes) ---
@@ -89,7 +114,7 @@ if (Test-Path $launcher) {
     # Run(cmd, 0, True) puts SW_HIDE in the CreateProcess STARTUPINFO; -WindowStyle
     # Hidden would only apply AFTER PowerShell has already shown its console.
     $vbs = @"
-' Deploys $TaskName -- generated by register-cron-output-watchdog.ps1
+' Deploys $TaskName -- generated by register-host-watchdog.ps1
 ' Objet : lancer la commande sans jamais afficher de console.
 Option Explicit
 Dim sh, rc

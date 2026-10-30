@@ -19,12 +19,21 @@
     `<hermes home>/cron/output/<job-id>/<timestamp>.md`, which carry both the
     run's `Response Characters` count and its full response body.
 
-    Two signals (precision + recall):
+    Four signals (precision + recall):
       THREAD-FAIL  — the body contains the malformed-tool-call marker string.
-      SHORT-OUTPUT — `Response Characters` below MinChars. A real report is
-                     ~400-2000 chars; a run that produced nothing meaningful is
-                     a few dozen. This is the cheapest instrument that would
-                     have caught all 11.
+      SHORT-OUTPUT — `Response Characters` below MinChars. The shortest real
+                     report measured is 152 chars; a run that produced nothing
+                     meaningful is a few dozen. A response that is exactly `[SILENT]`
+                     (an idle cycle, e.g. ping-intercom) is exempt.
+      SEARCH-DUMP  — the final response ends in raw web-search results (numbered
+                     bold titles, each followed by an indented non-GitHub URL):
+                     the turn stopped right after a search, with no report.
+                     Recorded `ok`. First seen 2026-10-15 12:34Z on ai-01, 4
+                     pr-review runs that day, none of which posted its STATUS.
+      RUN-ERROR    — the report carries the scheduler's `## Error` section with a
+                     traceback (hub IndexError, repetition loop, content filter).
+                     It has no `Response Characters` line, so neither signal
+                     above could ever see it.
 
     IMPORTANT — THREAD-FAIL does NOT mean the run's work was lost. The abort can
     land anywhere in the run, and the two measured cases differ:
@@ -61,16 +70,19 @@
 
 param(
     # Hermes home on the host volume (persists across rebuilds).
-    [string]$HermesHome = "C:\Users\jsboi\.hermes",
+    [string]$HermesHome = "$env:USERPROFILE\.hermes",
     # A run whose response is shorter than this produced nothing meaningful.
-    [int]$MinChars = 300,
+    # Length cannot separate a terse report from the known abort: a real pr-review
+    # report measured 152 chars on ai-01 (15/10), the abort body is 181. THREAD-FAIL
+    # catches the abort by its marker; this floor only catches near-empty runs.
+    [int]$MinChars = 100,
     # Only inspect reports modified this recently.
     [double]$LookbackHours = 26.0,
     # At most one aggregated Telegram alert per cooldown window.
     [double]$CooldownHours = 3.0,
     # Cap on remembered filenames (keeps the state file small).
     [int]$MaxSeen = 400,
-    [string]$HostEnvFile = "C:\Users\jsboi\.hermes\.env",
+    [string]$HostEnvFile = "$env:USERPROFILE\.hermes\.env",
     [string]$ReviewChatId = "-1003904676273",
     # Validate detection and logging without sending any Telegram alert, and
     # without touching the state file. Use this to prove the organ works before
@@ -87,8 +99,17 @@ param(
 $ErrorActionPreference = "Stop"
 $Invariant = [Globalization.CultureInfo]::InvariantCulture
 
-# Exact marker the framework prints when the model emits an unusable tool call.
-$ThreadFailMarker = 'missing required parameters: calls'
+# Marker the framework prints when the model emits an unusable tool call. The tool
+# name and the missing-parameter list vary by model output (measured: "tool_call"/
+# calls 08/10, "vision_analyze"/question 28/10 01:31Z — missed by the literal form):
+# match the class shape, not the founding incident's exact string.
+$ThreadFailMarker = 'failed: missing required parameters:'
+# Scheduler error section: the heading, then a Python traceback.
+$RunErrorPattern = '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)'
+# One raw search hit: "N. **title**" then an indented URL. GitHub URLs are excluded
+# so a real report listing PR links on their own line cannot match.
+$SearchHitPattern = '(?m)^\d+\. \*\*.+\*\*[ \t]*\r?\n[ \t]+https?://(?!github\.com)\S+'
+$SearchDumpMinHits = 3
 
 # --- helpers ---
 
@@ -126,7 +147,9 @@ function Set-State {
 function Send-Telegram {
     param([string]$Text)
     $token = Get-EnvValue "TELEGRAM_BOT_TOKEN"
-    if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN"; return $false }
+    # Write-Log emits on the success stream: inside this function it must go to the
+    # host, or the caller receives @(logline, $false) - a truthy array - as "sent".
+    if (-not $token) { Write-Log "TELEGRAM_BOT_TOKEN missing from $HostEnvFile — cannot alert." "WARN" | Out-Host; return $false }
     try {
         $body = @{ chat_id = $ReviewChatId; text = $Text; disable_web_page_preview = $true } | ConvertTo-Json
         # PS 5.1 re-encodes a string body to ANSI (cp1252) on send, which breaks
@@ -138,7 +161,7 @@ function Send-Telegram {
         return $true
     }
     catch {
-        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN"
+        Write-Log "Telegram alert failed: $($_.Exception.Message)" "WARN" | Out-Host
         return $false
     }
 }
@@ -200,15 +223,27 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
         if ($null -eq $body) { continue }
 
         $reason = $null
+        # Only the response is searched for hits: the report also embeds the job's prompt.
+        $respAt = $body.IndexOf('## Response')
+        $response = if ($respAt -ge 0) { $body.Substring($respAt) } else { '' }
         if ($body -match [regex]::Escape($ThreadFailMarker)) {
             $reason = "THREAD-FAIL"
+        }
+        elseif ($body -match $RunErrorPattern) {
+            $reason = "RUN-ERROR"
+        }
+        elseif ([regex]::Matches($response, $SearchHitPattern).Count -ge $SearchDumpMinHits) {
+            $reason = "SEARCH-DUMP"
         }
         else {
             # "**Response Characters:** 181"
             $m = [regex]::Match($body, 'Response Characters:\*{0,2}\s*(\d+)')
             if ($m.Success) {
                 $chars = [int]$m.Groups[1].Value
-                if ($chars -lt $MinChars) { $reason = "SHORT-OUTPUT" }
+                # A response that is exactly [SILENT] is the agent's explicit
+                # "nothing to report" (ping-intercom's normal idle cycle), not a failure.
+                $silent = $body -match '## Response\s*\[SILENT\]\s*$'
+                if ($chars -lt $MinChars -and -not $silent) { $reason = "SHORT-OUTPUT" }
             }
         }
 
@@ -229,25 +264,35 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
 
 $totalFailures = [int]$state.FailureCount + $failures.Count
 $cooldownOk = $false
+$sent = $false
 
 if ($failures.Count -eq 0) {
     Write-Log "OK - no new cron output failure in the last ${LookbackHours}h (cumulative seen: $totalFailures)." "INFO"
 }
 else {
     $byLane = ($failures | Group-Object Job | ForEach-Object { "$($_.Name)=$($_.Count)" }) -join ", "
-    Write-Log "DETECTED $($failures.Count) new silent failure(s): $byLane (cumulative: $totalFailures)." "ERROR"
+    Write-Log "DETECTED $($failures.Count) new failure(s): $byLane (cumulative: $totalFailures)." "ERROR"
 
     # Built unconditionally: the dry run must be able to show exactly what
     # would have been sent.
     $lines = $failures | Sort-Object When | ForEach-Object {
         "  - $($_.Job) @ $($_.When.ToString('MM-dd HH:mm', $Invariant))Z [$($_.Reason)]"
     }
+    $reasons = @($failures | ForEach-Object { $_.Reason } | Sort-Object -Unique)
+    $legend = @{
+        'THREAD-FAIL'  = "THREAD-FAIL (recorded ok): a malformed tool call from the hub-served model became the run's final response."
+        'SHORT-OUTPUT' = "SHORT-OUTPUT (recorded ok): the run produced almost nothing."
+        'SEARCH-DUMP'  = "SEARCH-DUMP (recorded ok): the run ended on raw web-search results instead of its report."
+        'RUN-ERROR'    = "RUN-ERROR: the scheduler logged a traceback (see the report's Error section)."
+    }
     $msg = @(
-        "[CRON-OUTPUT-WATCHDOG] $($failures.Count) cron run(s) FAILED SILENTLY",
+        "[CRON-OUTPUT-WATCHDOG] $($failures.Count) cron run(s) FAILED",
         "",
         ($lines -join "`n"),
         "",
-        "$totalFailures cumulative. These runs are recorded status=ok: each aborted on a malformed tool call from the hub-served model (192.168.0.50:3000) and that error text became the run's final response. An abort does NOT always mean lost work - a run that posted before aborting cost nothing. Read <hermes home>/cron/output/<job-id>/ to tell which case it was."
+        (($reasons | ForEach-Object { $legend[$_] }) -join "`n"),
+        "",
+        "$totalFailures cumulative. A failed run does NOT always mean lost work - a run that posted before failing cost nothing. Read <hermes home>/cron/output/<job-id>/ to tell which case it was."
     ) -join "`n"
 
     $cooldownOk = $true
@@ -268,7 +313,7 @@ else {
     }
     elseif ($cooldownOk) {
         $sent = Send-Telegram $msg
-        Write-Log "Alert sent to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
+        Write-Log "Alert to Telegram chat $ReviewChatId (sent=$sent)." $(if ($sent) { "INFO" } else { "WARN" })
     }
     else {
         Write-Log "Alert suppressed (cooldown ${CooldownHours}h not elapsed since last alert)." "INFO"
@@ -276,6 +321,9 @@ else {
 }
 
 # --- persist state ---
+
+# A dry run that found nothing still reaches this point: it must not write either.
+if ($DryRun) { exit 0 }
 
 # Remember every failure reported so a later tick never double-counts it.
 # Successful reports are deliberately NOT remembered: they can never turn into
@@ -289,7 +337,8 @@ if ($newSeen.Count -gt $MaxSeen) { $newSeen = $newSeen[($newSeen.Count - $MaxSee
 
 Set-State ([pscustomobject]@{
     LastRun       = $now.ToString("o", $Invariant)
-    LastAlert     = if ($failures.Count -gt 0 -and $cooldownOk -and -not $Seed) { $now.ToString("o", $Invariant) } else { $state.LastAlert }
+    # Only a DELIVERED alert starts the cooldown (same rule as the review watchdog).
+    LastAlert     = if ($sent -eq $true) { $now.ToString("o", $Invariant) } else { $state.LastAlert }
     SeenFiles     = $newSeen
     FailureCount  = $totalFailures
 })
