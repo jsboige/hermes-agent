@@ -104,6 +104,12 @@ $Invariant = [Globalization.CultureInfo]::InvariantCulture
 # calls 08/10, "vision_analyze"/question 28/10 01:31Z — missed by the literal form):
 # match the class shape, not the founding incident's exact string.
 $ThreadFailMarker = 'failed: missing required parameters:'
+# Stream cut mid-turn (measured 31/10 23:47Z, pr-review): the upstream stream ends
+# while a tool call is in flight, the framework delivers its apology text as the
+# run's FINAL RESPONSE (168 chars — above MinChars, so neither SHORT-OUTPUT nor
+# THREAD-FAIL could see it), and the run is recorded `ok`. Same class as THREAD-FAIL:
+# an abort that becomes the report.
+$StreamCutMarker = 'Stream ended without a finish_reason'
 # Scheduler error section: the heading, then a Python traceback.
 $RunErrorPattern = '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)'
 # One raw search hit: "N. **title**" then an indented URL. GitHub URLs are excluded
@@ -229,6 +235,11 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
         if ($body -match [regex]::Escape($ThreadFailMarker)) {
             $reason = "THREAD-FAIL"
         }
+        elseif ($response -match [regex]::Escape($StreamCutMarker)) {
+            # Searched in the response only: the marker is the framework's apology
+            # text, and reading the prompt for it would re-introduce prompt hits.
+            $reason = "STREAM-CUT"
+        }
         elseif ($body -match $RunErrorPattern) {
             $reason = "RUN-ERROR"
         }
@@ -281,6 +292,7 @@ else {
     $reasons = @($failures | ForEach-Object { $_.Reason } | Sort-Object -Unique)
     $legend = @{
         'THREAD-FAIL'  = "THREAD-FAIL (recorded ok): a malformed tool call from the hub-served model became the run's final response."
+        'STREAM-CUT'   = "STREAM-CUT (recorded ok): the upstream stream was cut mid-tool-call and the framework's apology became the report."
         'SHORT-OUTPUT' = "SHORT-OUTPUT (recorded ok): the run produced almost nothing."
         'SEARCH-DUMP'  = "SEARCH-DUMP (recorded ok): the run ended on raw web-search results instead of its report."
         'RUN-ERROR'    = "RUN-ERROR: the scheduler logged a traceback (see the report's Error section)."
