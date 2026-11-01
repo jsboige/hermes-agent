@@ -18,12 +18,25 @@ import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 
 QUERY = """query($login: String!) { user(login: $login) { contributionsCollection {
   pullRequestReviewContributions(first: 100, orderBy: {direction: DESC}) { nodes {
     pullRequestReview { databaseId submittedAt state body commit { oid } }
     pullRequest { number repository { nameWithOwner } } } } } } }"""
 LITERAL_PATH = re.compile(r"(^|\s)@(/|[\w.-]+\.(md|txt))")
+# Header forms the bot uses as its FIRST line (measured 2026-11-01 17:53-20:53Z):
+#   "[Hermes] ..."                      -> already covered by the marker
+#   "**[Hermes - review ai-01]** ..."   -> already covered by the marker
+#   "[APPROVE - Hermes, lane ...]"      -> NO "[Hermes" substring (roo #4487 18:12Z)
+#   "[REVIEW Hermes - lane ...]"        -> NO "[Hermes" substring (mcp #1619 18:19Z)
+# The last two read as not-Hermes to a plain marker search, so the window's only
+# visible reviews were dropped on 01/11 and the check printed "0 reviews".
+HEADER_HERMES = re.compile(r"^\s*\**\s*\[[^\]\n]*\bHermes\b")
+# The contributions view lags at its HEAD (measured 01/11: newest node 18:19:58Z
+# while REST showed reviews at 20:17:22Z, and zero CoursIA nodes in 100). Past
+# this lag an empty result is not a measurement, so it must not read as "none".
+HEAD_LAG_HOURS = 0.5
 
 
 def is_hermes_body(body, marker):
@@ -37,8 +50,11 @@ def is_hermes_body(body, marker):
     """
     if not body:
         return False
-    if body.split("\n", 1)[0].startswith("**[NanoClaw"):
+    first = body.split("\n", 1)[0]
+    if first.startswith("**[NanoClaw"):
         return False
+    if HEADER_HERMES.match(first):
+        return True
     return marker in body or body.startswith("## Review Hermes")
 
 
@@ -54,6 +70,19 @@ def main():
     nodes = json.loads(out)["data"]["user"]["contributionsCollection"]["pullRequestReviewContributions"]["nodes"]
     if nodes and nodes[-1]["pullRequestReview"]["submittedAt"] > args.since:
         print(f"WARNING: the 100 latest reviews only reach back to {nodes[-1]['pullRequestReview']['submittedAt']}")
+
+    # The tail check above cannot see a HEAD lag, and the head is what lags:
+    # on 01/11 the view stopped at 18:19:58Z while REST showed reviews posted
+    # at 20:17:22Z, with no CoursIA node at all in the 100. A head lag makes any
+    # count here a floor, not a measurement.
+    lag_hours = None
+    if nodes:
+        head_ts = nodes[0]["pullRequestReview"]["submittedAt"]
+        head_dt = datetime.fromisoformat(head_ts.replace("Z", "+00:00"))
+        lag_hours = (datetime.now(timezone.utc) - head_dt).total_seconds() / 3600.0
+        if lag_hours > HEAD_LAG_HOURS:
+            print(f"WARNING: the view's HEAD is {lag_hours:.1f}h behind (newest {head_ts}) — "
+                  f"reviews posted after it are invisible here, so any count below is a floor.")
 
     picked = [n for n in nodes
               if n["pullRequestReview"]["submittedAt"] >= args.since
@@ -77,7 +106,13 @@ def main():
     print(f"  duplicates at same commit: {dups or 'none'}")
     print(f"  literal-path bodies (any review): {literal or 'none'}")
     print(f"  bodies under 200 chars: {short or 'none'}")
-    sys.exit(1 if (dups or literal or short) else 0)
+    if dups or literal or short:
+        sys.exit(1)
+    if lag_hours is not None and lag_hours > HEAD_LAG_HOURS and not picked:
+        print(f"  INCONCLUSIVE: view head {lag_hours:.1f}h behind and nothing matched — "
+              f"0 here does NOT mean 'no review'. Verify by REST on the PRs named in the run reports.")
+        sys.exit(2)
+    sys.exit(0)
 
 
 if __name__ == "__main__":

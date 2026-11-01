@@ -186,7 +186,15 @@ function Test-HermesBody {
     $firstLine = ($s -split "`r?`n")[0]
     if ($firstLine.Contains("[NanoClaw")) { return $false }
     if ($s.Contains($script:BodyMarker)) { return $true }
-    return $s.StartsWith("## Review Hermes")
+    if ($s.StartsWith("## Review Hermes")) { return $true }
+    # 2026-11-01: two further first-line headers name Hermes but carry no
+    # "[Hermes" substring, so they read as not-Hermes: "[APPROVE — Hermes,
+    # lane myia-ai-01:hermes-agent, circuit #32…]" (roo #4487, 18:12:56Z) and
+    # "[REVIEW Hermes — lane myia-ai-01:hermes-agent, circuit #3219…]"
+    # (mcp-servers #1619, 18:19:58Z). Measured: they were the ONLY two reviews
+    # of the 17:53→20:53Z window still visible in the contributions view, and
+    # both were dropped — the window read as 0 reviews while REST showed 11.
+    return ($firstLine -match '^\s*\**\s*\[[^\]\n]*\bHermes\b')
 }
 
 function Invoke-GhGraphQL {
