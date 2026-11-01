@@ -222,11 +222,19 @@ function Invoke-GhGraphQL {
 # reviews. Before ALERTing, read the PRs the bot's newest report claims to have
 # reviewed and ask REST directly. Only a report written in the last 3 h counts:
 # a stale one says nothing about the current window and must not mask an outage.
-function Get-RestMarkedReview {
-    if (-not (Test-Path $PrReviewReportsDir)) { return $null }
+function Get-RestMarkedReviewsByRepo {
+    # Same report scan as below, but returns the freshest marked review PER REPO
+    # (hashtable @{ Latest; ByRepo }) instead of a single timestamp. Fifth
+    # blindness (2026-11-01 20:53Z): the contributions view now decouples at its
+    # HEAD — newest node 21:05:17Z while REST showed marked reviews up to
+    # 23:43:42Z, and ZERO CoursIA node among the 100 — so the per-repo summary
+    # printed CoursIA "lastMarkedReview=none" all evening while Hermes posted
+    # ~all its reviews there. This scan is the per-repo floor.
+    $result = @{ Latest = $null; ByRepo = @{} }
+    if (-not (Test-Path $PrReviewReportsDir)) { return $result }
     $reports = Get-ChildItem $PrReviewReportsDir -Filter *.md -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3
-    if ($null -eq $reports) { return $null }
+    if ($null -eq $reports) { return $result }
     # 2026-10-24 22:37Z: the NEWEST report can be an abort whose Response names no
     # PR, leaving the cross-check with no candidates while reviews exist — try the
     # next reports (same < 3 h freshness rule) until one yields candidates.
@@ -248,9 +256,9 @@ function Get-RestMarkedReview {
         }
         if ($candidates.Count -gt 0) { break }
     }
-    if ($candidates.Count -eq 0) { return $null }
-    $freshest = $null
-    foreach ($c in ($candidates | Select-Object -First 2)) {
+    # Cap at 6 PRs per tick (was 2): covers a full run's batch while staying far
+    # from any rate budget at the 30-min tick.
+    foreach ($c in ($candidates | Select-Object -First 6)) {
         $parts = $c -split '#'
         $reviews = Invoke-Gh "repos/$($parts[0])/pulls/$($parts[1])/reviews?per_page=30"
         if ($null -eq $reviews) { continue }
@@ -259,10 +267,18 @@ function Get-RestMarkedReview {
             if (-not (Test-HermesBody $rv.body)) { continue }
             $t = ConvertTo-UtcDateTime $rv.submitted_at
             if ($null -eq $t) { continue }
-            if ($null -eq $freshest -or $t -gt $freshest) { $freshest = $t }
+            if (-not $result.ByRepo.ContainsKey($parts[0]) -or $t -gt $result.ByRepo[$parts[0]]) {
+                $result.ByRepo[$parts[0]] = $t
+            }
+            if ($null -eq $result.Latest -or $t -gt $result.Latest) { $result.Latest = $t }
         }
     }
-    return $freshest
+    return $result
+}
+
+function Get-RestMarkedReview {
+    $r = Get-RestMarkedReviewsByRepo
+    return $r.Latest
 }
 
 # --- setup ---
@@ -336,15 +352,39 @@ foreach ($n in $data.user.contributionsCollection.pullRequestReviewContributions
     if ($null -eq $latestReview -or $t -gt $latestReview) { $latestReview = $t }
 }
 
+$restByRepo = $null
 foreach ($repo in $TargetRepos) {
     # Open-PR count only: is there anything to review at all? One page, so 100 means 100+.
     $pulls = Invoke-Gh "repos/$repo/pulls?state=open&per_page=100"
     if ($null -eq $pulls) { $repoSummary += "$repo=(query-failed)"; continue }
     $openCount = @($pulls).Count
     $totalOpenPrs += $openCount
-    # "none" means none among the bot's $MaxReviews latest reviews, not "never".
-    $age = if ($repoLatest.ContainsKey($repo)) { (($now - $repoLatest[$repo]).TotalHours).ToString("F1", $Invariant) + "h" } else { "none" }
+    $viaRest = $false
+    if (-not $repoLatest.ContainsKey($repo)) {
+        # Fifth blindness: a repo absent from the view is not "no review" — the
+        # view's head can be hours behind with that repo's nodes missing entirely
+        # (CoursIA, 2026-11-01). Fill from the REST report scan, once per tick.
+        if ($null -eq $restByRepo) { $restByRepo = Get-RestMarkedReviewsByRepo }
+        if ($restByRepo.ByRepo.ContainsKey($repo)) {
+            $repoLatest[$repo] = $restByRepo.ByRepo[$repo]
+            $viaRest = $true
+        }
+    }
+    # "none" means none among the bot's $MaxReviews latest reviews AND none in the
+    # REST report scan, not "never".
+    $age = if ($repoLatest.ContainsKey($repo)) {
+        (($now - $repoLatest[$repo]).TotalHours).ToString("F1", $Invariant) + $(if ($viaRest) { "h(REST)" } else { "h" })
+    } else { "none" }
     $repoSummary += "$repo(open=$(if ($openCount -ge 100) { '100+' } else { $openCount }),lastMarkedReview=$age)"
+}
+
+# If the REST scan saw a fresher marked review than the (head-lagged) view, adopt
+# it now: same evidence the pre-ALERT cross-check would find, read earlier and
+# without waiting to be about to cry wolf.
+if ($restByRepo -eq $null) { $restByRepo = Get-RestMarkedReviewsByRepo }
+if ($restByRepo.Latest -and (($null -eq $latestReview) -or ($restByRepo.Latest -gt $latestReview))) {
+    Write-Log "GraphQL contributions view HEAD stale — REST scan found a fresher marked review at $($restByRepo.Latest.ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant)) (view head: $(if ($latestReview) { $latestReview.ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant) } else { 'none' }))." "WARN"
+    $latestReview = $restByRepo.Latest
 }
 
 # --- evaluate ---
