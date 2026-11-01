@@ -309,6 +309,26 @@ function Get-LastClusterHealthTimestamp {
                     if ($null -ne $t -and ($null -eq $lastTs -or $t -gt $lastTs)) { $lastTs = $t }
                 }
             }
+            # Fallback (>=T#197, 2026-11-01): the tour also lands as a consolidated
+            # STATUS line instead of a [CLUSTER-HEALTH]-titled intercom block.
+            # Measured shape in global.md's Status section:
+            #   "- **Cluster-tour T#197 (12:19Z)** : fleet 100/100, 8/8 online ; ..."
+            # The 12:49Z tick judged T#197 MISSING (last_health=never) while the post
+            # was there — a 4th title drift, this time dropping the marker entirely.
+            # Two traps this pattern must NOT match, both measured in the same file:
+            #   - "Dossiers à 3 relances ... si silence au prochain tour (T#197)" —
+            #     names the tour number without being the post: require the
+            #     "Cluster-tour T#N (HH:MMZ)" head AND a "fleet N/N" reading on the
+            #     SAME line;
+            #   - this organ's own [WARN] — an intercom block, never a Status line.
+            # Day is taken as the current UTC day (cross-midnight guard below); the
+            # archives scanned are >= Since (recent), so day drift is not a concern.
+            $linePattern = '(?m)^- \*\*[Cc]luster-tour T#\d+ \((\d{2}):(\d{2})Z?\)\*\*.*fleet \d+/\d+'
+            foreach ($m2 in [regex]::Matches($text, $linePattern)) {
+                $t2 = [datetime]::UtcNow.Date.AddHours([int]$m2.Groups[1].Value).AddMinutes([int]$m2.Groups[2].Value)
+                if ($t2 -gt [datetime]::UtcNow.AddHours(2)) { $t2 = $t2.AddDays(-1) }
+                if ($null -eq $lastTs -or $t2 -gt $lastTs) { $lastTs = $t2 }
+            }
         } catch {
             Write-Log "dashboard parse failed ($f): $($_.Exception.Message)" "WARN"
         }
