@@ -316,12 +316,54 @@ function Get-LastClusterHealthTimestamp {
     return $lastTs
 }
 
+# The tour's own run report NAMES the cause this organ used to guess at. Measured
+# 2026-11-01 00:20:11Z: the fire 00:13:43Z died on a malformed tool call
+# ("failed: missing required parameters: calls", 181 chars) — an abort that became the
+# run's response, BEFORE any post. That is neither a bus failure nor a prompt skip, and
+# the 00:49Z [WARN] listing both hypotheses sent the reader down a dead end. The
+# cron-output watchdog already classifies that report; this organ now reads the same
+# file so its [WARN] carries a measured cause.
+function Get-TourRunCause {
+    param([datetime]$FireAnchor)
+    $outRoot = Join-Path (Split-Path $JobsFile -Parent) "output"
+    if (-not (Test-Path $outRoot)) { return "aucun rapport de run lisible (répertoire output absent) — cause NON mesurée" }
+    $reports = @()
+    foreach ($dir in (Get-ChildItem $outRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match 'cluster-tour' })) {
+        $reports += @(Get-ChildItem $dir.FullName -Filter "*.md" -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTimeUtc -ge $FireAnchor.AddMinutes(-2) -and $_.LastWriteTimeUtc -le $FireAnchor.AddMinutes(30) })
+    }
+    if ($reports.Count -eq 0) { return "aucun rapport de run dans les 30 min du fire (le run n'a pas démarré ?) — cause NON mesurée" }
+    $r = @($reports | Sort-Object LastWriteTimeUtc)[-1]
+    $body = Get-Content $r.FullName -Raw -ErrorAction SilentlyContinue
+    if ($null -eq $body) { return "rapport $($r.Name) illisible — cause NON mesurée" }
+    # Only the response half is searched: the report also embeds the job's prompt.
+    $respAt = $body.IndexOf('## Response')
+    $response = if ($respAt -ge 0) { $body.Substring($respAt) } else { '' }
+    $why = if ($body -match [regex]::Escape('failed: missing required parameters:')) {
+        "THREAD-FAIL — appel d'outil malformé du modèle servi par le hub, l'abort est devenu la réponse du run (aucun post effectué)"
+    } elseif ($response -match [regex]::Escape('Stream ended without a finish_reason')) {
+        "STREAM-CUT — flux amont coupé en cours d'appel d'outil, l'excuse du framework est devenue la réponse du run (aucun post effectué)"
+    } elseif ($body -match '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)') {
+        "RUN-ERROR — traceback du scheduler (voir la section Error du rapport)"
+    } else {
+        $m = [regex]::Match($body, 'Response Characters:\*{0,2}\s*(\d+)')
+        if ($m.Success -and [int]$m.Groups[1].Value -lt 100) {
+            "SHORT-OUTPUT — le run a produit presque rien ($($m.Groups[1].Value) caractères) et n'a rien posté"
+        } else {
+            "aucun marqueur d'abort : le run a produit un rapport normal ⇒ chercher côté write MCP / prompt-skip (#3)"
+        }
+    }
+    return "$why [rapport $($r.Name)]"
+}
+
 function Get-WarnContent {
-    param([string]$TourTs)
+    param([string]$TourTs, [string]$Cause)
     return @(
         "## [WARN] cluster-tour ETAPE 3 non exécutée — tour $TourTs",
         "",
-        "**Watchdog:** le fire ``hermes-cluster-tour`` ($TourTs UTC) a rapporté ``status=ok`` mais aucun append ``[CLUSTER-HEALTH]`` sur ce dashboard global dans les $PostMarginMinutes min suivantes (archives de condensation comprises). Cause possible : échec silencieux du write MCP (bus RooSync down, cf. incident 12→15/08 : instance RSM morte derrière sparfenyuk, handshake OK) OU prompt-skip (issue jsboige/hermes-agent #3). Croiser avec l'état du bus MCP (checks 6/8 de la routine opérateur). Vérification programmatique post-cron. Le tour n'est PAS re-firé (spec ai-01)."
+        "**Cause mesurée (rapport du run) :** $Cause",
+        "",
+        "**Watchdog:** le fire ``hermes-cluster-tour`` ($TourTs UTC) a rapporté ``status=ok`` mais aucun append ``[CLUSTER-HEALTH]`` sur ce dashboard global dans les $PostMarginMinutes min suivantes (archives de condensation comprises). Un abort du run (THREAD-FAIL, STREAM-CUT, RUN-ERROR, SHORT-OUTPUT) se produit AVANT tout post : dans ce cas ce n'est ni une panne de bus ni un prompt-skip, et il n'y a rien à chercher côté MCP. Sans cause mesurée, croiser avec l'état du bus MCP (checks 6/8 de la routine opérateur). Vérification programmatique post-cron. Le tour n'est PAS re-firé (spec ai-01)."
     ) -join "`n"
 }
 
@@ -329,7 +371,7 @@ function Get-WarnContent {
 # v3 store and every dashboard reader of the cluster sees the hole where the
 # tour post should have been. Idempotent per fire (messageId).
 function Publish-GlobalWarn {
-    param([datetime]$FireAnchor)
+    param([datetime]$FireAnchor, [string]$Cause)
     $fireKey = $FireAnchor.ToString("yyyyMMddTHHmmssZ", $Invariant)
     $result = Invoke-RsmDashboard @{
         action    = 'append'
@@ -337,7 +379,7 @@ function Publish-GlobalWarn {
         author    = @{ machineId = $SeatMachineId; workspace = $SeatWorkspace }
         tags      = @('WARN', 'cluster-tour-watchdog')
         messageId = "cluster-tour-watchdog-missing-$SeatMachineId-$fireKey"
-        content   = Get-WarnContent $FireAnchor.ToString("o", $Invariant)
+        content   = Get-WarnContent $FireAnchor.ToString("o", $Invariant) $Cause
     }
     return ($null -ne $result -and $result -match 'success\\{0,2}"\s*:\s*true')
 }
@@ -413,13 +455,16 @@ if ($verdict -eq "OK") {
     if ($lastAlert) {
         if ((($now - $lastAlert).TotalMinutes) -lt $CooldownMinutes) { $cooldownOk = $false }
     }
-    $msg = "[CLUSTER-TOUR-WATCHDOG] MISSING — le fire cluster-tour @ $($fireAnchor.ToString('o',$Invariant)) n'a pas posté [CLUSTER-HEALTH] sur global. Verdict count: OK=$okCount MISSING=$missingCount. [WARN] posté sur global. Voir issue jsboige/hermes-agent #3."
+    # Read once, used by both the dashboard [WARN] and the Telegram line.
+    $tourCause = Get-TourRunCause $fireAnchor
+    Write-Log "MISSING cause: $tourCause" "INFO"
+    $msg = "[CLUSTER-TOUR-WATCHDOG] MISSING — le fire cluster-tour @ $($fireAnchor.ToString('o',$Invariant)) n'a pas posté [CLUSTER-HEALTH] sur global. Cause mesurée: $tourCause. Verdict count: OK=$okCount MISSING=$missingCount. [WARN] posté sur global. Voir issue jsboige/hermes-agent #3."
 
     if ($DryRun) {
-        Write-Log "DRY-RUN would post on global as $SeatMachineId|$SeatWorkspace :`n$(Get-WarnContent $fireAnchor.ToString('o', $Invariant))"
+        Write-Log "DRY-RUN would post on global as $SeatMachineId|$SeatWorkspace :`n$(Get-WarnContent $fireAnchor.ToString('o', $Invariant) $tourCause)"
         Write-Log "DRY-RUN would send Telegram (cooldownOk=$cooldownOk): $msg"
     } else {
-        $warnPosted = Publish-GlobalWarn $fireAnchor
+        $warnPosted = Publish-GlobalWarn $fireAnchor $tourCause
         Write-Log "MISSING: [WARN] posted on global via the bus (posted=$warnPosted)." $(if ($warnPosted) { "INFO" } else { "ERROR" })
         if ($cooldownOk) {
             $sent = Send-Telegram $msg
