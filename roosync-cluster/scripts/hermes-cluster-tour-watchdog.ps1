@@ -326,7 +326,16 @@ function Get-LastClusterHealthTimestamp {
             $linePattern = '(?m)^- \*\*[Cc]luster-tour T#\d+ \((\d{2}):(\d{2})Z?\)\*\*.*fleet \d+/\d+'
             foreach ($m2 in [regex]::Matches($text, $linePattern)) {
                 $t2 = [datetime]::UtcNow.Date.AddHours([int]$m2.Groups[1].Value).AddMinutes([int]$m2.Groups[2].Value)
-                if ($t2 -gt [datetime]::UtcNow.AddHours(2)) { $t2 = $t2.AddDays(-1) }
+                # The line carries an hour but no date, so the day comes from UtcNow —
+                # and a stamp LATER TODAY is not "upcoming", it is YESTERDAY's tour
+                # read after midnight. The old guard tolerated anything up to 2h ahead,
+                # which manufactured a FUTURE last_health for the whole 10:19-12:19Z
+                # band: measured 02/11 at 10:49Z and 11:19Z, last_health read
+                # 2026-11-02T12:19:00 (the 01/11 T#197 line) while the wall clock was
+                # 11:19Z. Any tour lost in the 12:13Z slot would then have been judged
+                # OK — the exact loss this organ exists to catch, masked by its own
+                # parser. A tour post can only be in the past: flip on ANY future value.
+                if ($t2 -gt [datetime]::UtcNow) { $t2 = $t2.AddDays(-1) }
                 if ($null -eq $lastTs -or $t2 -gt $lastTs) { $lastTs = $t2 }
             }
         } catch {
