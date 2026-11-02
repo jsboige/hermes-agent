@@ -360,20 +360,27 @@ foreach ($repo in $TargetRepos) {
     $openCount = @($pulls).Count
     $totalOpenPrs += $openCount
     $viaRest = $false
-    if (-not $repoLatest.ContainsKey($repo)) {
-        # Fifth blindness: a repo absent from the view is not "no review" — the
-        # view's head can be hours behind with that repo's nodes missing entirely
-        # (CoursIA, 2026-11-01). Fill from the REST report scan, once per tick.
-        if ($null -eq $restByRepo) { $restByRepo = Get-RestMarkedReviewsByRepo }
-        if ($restByRepo.ByRepo.ContainsKey($repo)) {
-            $repoLatest[$repo] = $restByRepo.ByRepo[$repo]
-            $viaRest = $true
+    # A repo PRESENT in the view is not a fresh measurement either: on 02/11 the
+    # view's head had frozen at 18:19:58Z, so roo-extensions and mcp-servers printed
+    # "8.4h" — the head's age, not a reading taken now, and an UPPER bound on the
+    # real age (a newer review would be invisible). Fill from the REST report scan
+    # both when the repo is absent (fifth blindness: CoursIA, 2026-11-01) and when
+    # the scan holds something fresher than the view for it.
+    if ($null -eq $restByRepo) { $restByRepo = Get-RestMarkedReviewsByRepo }
+    if ($restByRepo.ByRepo.ContainsKey($repo) -and
+        (-not $repoLatest.ContainsKey($repo) -or $restByRepo.ByRepo[$repo] -gt $repoLatest[$repo])) {
+        if ($repoLatest.ContainsKey($repo)) {
+            Write-Log "View value superseded for $repo — REST scan has $(($restByRepo.ByRepo[$repo]).ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant)) against the view's $((($repoLatest[$repo])).ToString('yyyy-MM-ddTHH:mm:ssZ', $Invariant))." "INFO"
         }
+        $repoLatest[$repo] = $restByRepo.ByRepo[$repo]
+        $viaRest = $true
     }
     # "none" means none among the bot's $MaxReviews latest reviews AND none in the
-    # REST report scan, not "never".
+    # REST report scan, not "never". Every age names the instrument that produced it:
+    # a bare "8.4h" read as a measurement taken now when it was only the age of the
+    # view's frozen head (02/11). "h(view)" is an UPPER bound on freshness.
     $age = if ($repoLatest.ContainsKey($repo)) {
-        (($now - $repoLatest[$repo]).TotalHours).ToString("F1", $Invariant) + $(if ($viaRest) { "h(REST)" } else { "h" })
+        (($now - $repoLatest[$repo]).TotalHours).ToString("F1", $Invariant) + $(if ($viaRest) { "h(REST)" } else { "h(view)" })
     } else { "none" }
     $repoSummary += "$repo(open=$(if ($openCount -ge 100) { '100+' } else { $openCount }),lastMarkedReview=$age)"
 }
