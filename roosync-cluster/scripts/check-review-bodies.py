@@ -63,6 +63,8 @@ def main():
     ap.add_argument("since", help="ISO UTC timestamp, e.g. 2026-10-15T01:50:00Z")
     ap.add_argument("--login", default="clusterManager-Myia")
     ap.add_argument("--marker", default="[Hermes")
+    ap.add_argument("--repos", default="jsboige/CoursIA,jsboige/roo-extensions,jsboige/jsboige-mcp-servers",
+                    help="fleet repos the account reviews daily; a repo absent from the whole page is warned about")
     args = ap.parse_args()
 
     out = subprocess.run(["gh", "api", "graphql", "-f", f"query={QUERY}", "-f", f"login={args.login}"],
@@ -90,6 +92,12 @@ def main():
     # A literal-path body carries no marker: check every review of the window for those.
     window = [n for n in nodes if n["pullRequestReview"]["submittedAt"] >= args.since]
 
+    # A repo-by-repo truncation is invisible to both guards: on 2026-11-02 the view's
+    # head was FRESH (03:15:48Z, no lag) yet held ZERO CoursIA nodes while REST proved
+    # 11 in-window CoursIA reviews — the run below read "1 review" and exited 0. Print
+    # the distribution so the truncation is visible in the output itself.
+    by_repo = collections.Counter(n["pullRequest"]["repository"]["nameWithOwner"] for n in window)
+
     def ref(n):
         r = n["pullRequestReview"]
         return f"{n['pullRequest']['repository']['nameWithOwner']}#{n['pullRequest']['number']} review {r['databaseId']}"
@@ -103,6 +111,22 @@ def main():
     states = collections.Counter(n["pullRequestReview"]["state"] for n in picked)
 
     print(f"since {args.since}: {len(picked)} reviews marked {args.marker!r} {dict(states)}")
+    print(f"  window: {len(window)} reviews by repo {dict(by_repo) or 'none'}")
+    # Third shape of the view's truncation (measured 2026-11-02 05:53Z): tail reach OK,
+    # head FRESH, yet ZERO CoursIA nodes in the whole 100-node page (roo 38 / mcp 40 /
+    # Arg 22) while REST proved 11 in-window CoursIA reviews — the run above read
+    # "1 review" and exited 0. A declared fleet repo absent from the entire page means
+    # the view cannot speak about it at all: say so instead of letting silence read
+    # as a count.
+    page_by_repo = collections.Counter(n["pullRequest"]["repository"]["nameWithOwner"] for n in nodes)
+    for repo in args.repos.split(","):
+        repo = repo.strip()
+        if not repo:
+            continue
+        if repo not in page_by_repo:
+            print(f"  WARNING: {repo} holds 0 of the {len(nodes)} latest review nodes — the view "
+                  f"cannot speak about that repo (measured case: 11 REST-verified reviews, 0 nodes). "
+                  f"Verify by REST on the PRs named in the bot's run reports.")
     print(f"  duplicates at same commit: {dups or 'none'}")
     print(f"  literal-path bodies (any review): {literal or 'none'}")
     print(f"  bodies under 200 chars: {short or 'none'}")
