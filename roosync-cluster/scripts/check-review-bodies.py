@@ -18,6 +18,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 QUERY = """query($login: String!) { user(login: $login) { contributionsCollection {
@@ -76,6 +77,26 @@ def is_hermes_body(body, marker):
     return marker in body or body.startswith("## Review Hermes")
 
 
+def gh_api(args, attempts=3):
+    """Run `gh api …`, retrying a TRANSIENT failure, and never die on a traceback.
+
+    Measured 2026-11-02 11:36Z: a burst of REST calls on this host made the single
+    GraphQL call fail once (quota was fine: 2570/5000 remaining), and the checker
+    exited on a `subprocess.CalledProcessError` traceback. A traceback reads like a
+    broken script, not like "the instrument could not measure" — and the next line
+    of an incident report would have been "the checker is broken", which was false.
+    Returns None when every attempt failed; the caller then says so explicitly.
+    """
+    last = None
+    for i in range(attempts):
+        last = subprocess.run(args, capture_output=True, text=True)
+        if last.returncode == 0:
+            return last.stdout
+        if i + 1 < attempts:
+            time.sleep(2 * (i + 1))
+    return None
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("since", help="ISO UTC timestamp, e.g. 2026-10-15T01:50:00Z")
@@ -85,8 +106,15 @@ def main():
                     help="fleet repos the account reviews daily; a repo absent from the whole page is warned about")
     args = ap.parse_args()
 
-    out = subprocess.run(["gh", "api", "graphql", "-f", f"query={QUERY}", "-f", f"login={args.login}"],
-                         capture_output=True, text=True, check=True).stdout
+    out = gh_api(["gh", "api", "graphql", "-f", f"query={QUERY}", "-f", f"login={args.login}"])
+    if out is None:
+        # Exit 3 is "cannot measure", a third state distinct from 0 (clean),
+        # 1 (defects found) and 2 (view inconclusive). Never let an unavailable
+        # instrument be read as a count of zero reviews.
+        print("INSTRUMENT UNAVAILABLE: `gh api graphql` failed after 3 attempts. "
+              "This is NOT a review count — do not read it as 'no review'. "
+              "Verify by REST on the PRs named in the bot's run reports.")
+        sys.exit(3)
     nodes = json.loads(out)["data"]["user"]["contributionsCollection"]["pullRequestReviewContributions"]["nodes"]
     if nodes and nodes[-1]["pullRequestReview"]["submittedAt"] > args.since:
         print(f"WARNING: the 100 latest reviews only reach back to {nodes[-1]['pullRequestReview']['submittedAt']}")
