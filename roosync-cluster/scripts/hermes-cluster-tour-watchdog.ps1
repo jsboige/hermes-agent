@@ -304,7 +304,20 @@ function Get-LastClusterHealthTimestamp {
                 # "(?:\[[^\]]+\])*" tolerates any number of intercalated bracketed tags
                 # (roo-extensions #3743: the strict "\s+T#N" successor matched nothing
                 # since T#112, making last_health=never and every verdict MISSING).
-                if ($blockBody -match "(?m)^#{0,2}\s*\[CLUSTER-HEALTH\](?:\[[^\]]+\])*\s+T#\d+") {
+                # EIGHTH blindness, measured 2026-11-02 on T#199: the store ESCAPES
+                # leading hashes in message bodies ("\#\# [CLUSTER-HEALTH] T#199 — …",
+                # archive global-2026-11-02T14-07-05.md L87, block 12:16:44Z) so a
+                # message can never forge a dashboard section. "#{0,2}" cannot see
+                # through the backslash: the post was 3 min after dispatch, yet the
+                # 12:49Z tick read last_health=never and alerted a FALSE MISSING
+                # (WARN on global + Telegram). The bot had followed the contract
+                # title exactly - being contract-exact is what blinded the organ.
+                # "(?:\\?#){0,2}" matches #, ##, \# and \#\# alike. This also
+                # re-opens the 2026-11-01 T#197 retraction's diagnosis: no T#197
+                # intercom block survives in any 11/01 archive, so "the marker
+                # disappeared" was never proven - the escaped-title mechanism was
+                # simply invisible until an archive kept the block whole.
+                if ($blockBody -match "(?m)^(?:\\?#){0,2}\s*\[CLUSTER-HEALTH\](?:\[[^\]]+\])*\s+T#\d+") {
                     $t = ConvertTo-UtcDateTime $m.Groups[1].Value
                     if ($null -ne $t -and ($null -eq $lastTs -or $t -gt $lastTs)) { $lastTs = $t }
                 }
