@@ -33,6 +33,16 @@ LITERAL_PATH = re.compile(r"(^|\s)@(/|[\w.-]+\.(md|txt))")
 # The last two read as not-Hermes to a plain marker search, so the window's only
 # visible reviews were dropped on 01/11 and the check printed "0 reviews".
 HEADER_HERMES = re.compile(r"^\s*\**\s*\[[^\]\n]*\bHermes\b")
+# Fifth drift, measured 2026-11-02 08:00-08:36Z: the bot wrote its verdict as a
+# markdown HEADING ("## Verdict : CHANGES_REQUESTED — …", "## Verdict : APPROVE
+# — …") in all five reviews of the 08:36 run and the three before it. None of the
+# forms below matched, so the window read "0 reviews marked" while REST proved 14,
+# and the watchdog alerted "no review in 5.4h" one minute after a real review
+# (#23899, 08:36:25Z). NanoClaw's equivalent is a BARE "VERDICT: LGTM (…)" line
+# followed by "**[NanoClaw]**" — the markdown heading separates the two: 14/14
+# Hermes and 12/12 NanoClaw classified correctly on the live window.
+HEADER_VERDICT = re.compile(r"^\s*#{1,6}\s*(?:Review\s+)?Verdict\s*:", re.IGNORECASE)
+NANOCLAW_LINE = re.compile(r"^\s*\**\s*\[NanoClaw")
 # The contributions view lags at its HEAD (measured 01/11: newest node 18:19:58Z
 # while REST showed reviews at 20:17:22Z, and zero CoursIA nodes in 100). Past
 # this lag an empty result is not a measurement, so it must not read as "none".
@@ -50,9 +60,17 @@ def is_hermes_body(body, marker):
     """
     if not body:
         return False
-    first = body.split("\n", 1)[0]
+    lines = body.split("\n")
+    first = lines[0]
     if first.startswith("**[NanoClaw"):
         return False
+    if HEADER_VERDICT.match(first):
+        # A heading verdict is Hermes's form, but a body that names NanoClaw in
+        # its first content lines is NanoClaw's (defensive; not yet observed).
+        head = [line for line in lines[:6] if line.strip()][:3]
+        if any(NANOCLAW_LINE.match(line) for line in head[1:]):
+            return False
+        return True
     if HEADER_HERMES.match(first):
         return True
     return marker in body or body.startswith("## Review Hermes")

@@ -183,8 +183,28 @@ function Test-HermesBody {
     param([object]$Body)
     $s = [string]$Body
     if (-not $s) { return $false }
-    $firstLine = ($s -split "`r?`n")[0]
+    $lines = $s -split "`r?`n"
+    $firstLine = $lines[0]
     if ($firstLine.Contains("[NanoClaw")) { return $false }
+    # Fifth drift, measured 2026-11-02 08:00-08:36Z: the bot wrote its verdict as
+    # a markdown HEADING — "## Verdict : CHANGES_REQUESTED — …", "## Verdict :
+    # APPROVE — …" — in all five reviews of the 08:36 run and the three before
+    # it. No "[Hermes" substring, no "## Review Hermes" prefix, so every one read
+    # as not-Hermes: the REST cross-check found nothing newer than 29.3h and this
+    # organ ALERTED "no review in 5.4h" at 08:37:19Z, ONE MINUTE after a real
+    # review (#23899, 08:36:25Z) it had itself just been unable to classify.
+    # NanoClaw's equivalent is a BARE "VERDICT: LGTM (…)" line followed by
+    # "**[NanoClaw]**", so the markdown heading separates the two: 14/14 Hermes
+    # and 12/12 NanoClaw classified correctly on the live window.
+    if ($firstLine -match '^\s*#{1,6}\s*(?:Review\s+)?Verdict\s*:') {
+        # Defensive (not yet observed): a body that names NanoClaw in its first
+        # content lines is NanoClaw's, whatever its heading looks like.
+        $head = @($lines | Select-Object -First 6 | Where-Object { $_.Trim() } | Select-Object -First 3)
+        for ($i = 1; $i -lt $head.Count; $i++) {
+            if ($head[$i] -match '^\s*\**\s*\[NanoClaw') { return $false }
+        }
+        return $true
+    }
     if ($s.Contains($script:BodyMarker)) { return $true }
     if ($s.StartsWith("## Review Hermes")) { return $true }
     # 2026-11-01: two further first-line headers name Hermes but carry no
