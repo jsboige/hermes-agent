@@ -19,7 +19,7 @@
     `<hermes home>/cron/output/<job-id>/<timestamp>.md`, which carry both the
     run's `Response Characters` count and its full response body.
 
-    Four signals (precision + recall):
+    Six signals (precision + recall):
       THREAD-FAIL  — the body contains the malformed-tool-call marker string.
       SHORT-OUTPUT — `Response Characters` below MinChars. The shortest real
                      report measured is 152 chars; a run that produced nothing
@@ -34,6 +34,17 @@
                      traceback (hub IndexError, repetition loop, content filter).
                      It has no `Response Characters` line, so neither signal
                      above could ever see it.
+      EMPTY-RESPONSE — the model returned an empty completion (finish_reason:
+                     stop) and the framework's apology text became the run's
+                     FINAL RESPONSE. Measured 2026-11-03 09:54->10:32Z: 5 runs
+                     across 3 lanes (pr-review, notebook-audit, ping-intercom),
+                     all recorded `ok`, all INVISIBLE to this organ (184-223
+                     chars, above MinChars, no `## Error` section) while its log
+                     read "no new cron output failure". Variant with "~N input
+                     tokens" = the lane's conversation context is saturated
+                     (09:12Z pr-review, ~184703 tokens). Root cause upstream
+                     (ai-01 LLM primary / provider wave), lanes self-recovered
+                     at their next slot — the signal is the RATE, not the event.
 
     IMPORTANT — THREAD-FAIL does NOT mean the run's work was lost. The abort can
     land anywhere in the run, and the two measured cases differ:
@@ -110,6 +121,12 @@ $ThreadFailMarker = 'failed: missing required parameters:'
 # THREAD-FAIL could see it), and the run is recorded `ok`. Same class as THREAD-FAIL:
 # an abort that becomes the report.
 $StreamCutMarker = 'Stream ended without a finish_reason'
+# Empty completion delivered as the final response (measured 2026-11-03, two
+# framework wordings: "...and the conversation context is very large
+# (finish_reason: stop, ~NNN input tokens)" and "...(finish_reason: stop). This
+# is usually transient..."). Response-only, same as STREAM-CUT: the prompt may
+# quote the marker. Above MinChars (184/223), so no other signal can see it.
+$EmptyResponseMarker = 'model returned an empty response'
 # Scheduler error section: the heading, then a Python traceback.
 $RunErrorPattern = '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)'
 # One raw search hit: "N. **title**" then an indented URL. GitHub URLs are excluded
@@ -240,6 +257,11 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
             # text, and reading the prompt for it would re-introduce prompt hits.
             $reason = "STREAM-CUT"
         }
+        elseif ($response -match [regex]::Escape($EmptyResponseMarker)) {
+            # Same class as STREAM-CUT: an apology text became the report.
+            # Searched in the response only, for the same reason.
+            $reason = "EMPTY-RESPONSE"
+        }
         elseif ($body -match $RunErrorPattern) {
             $reason = "RUN-ERROR"
         }
@@ -296,6 +318,7 @@ else {
         'SHORT-OUTPUT' = "SHORT-OUTPUT (recorded ok): the run produced almost nothing."
         'SEARCH-DUMP'  = "SEARCH-DUMP (recorded ok): the run ended on raw web-search results instead of its report."
         'RUN-ERROR'    = "RUN-ERROR: the scheduler logged a traceback (see the report's Error section)."
+        'EMPTY-RESPONSE' = "EMPTY-RESPONSE (recorded ok): the model returned an empty completion and the framework's apology became the report (upstream/provider wave; check the lane's next slot for recovery)."
     }
     $msg = @(
         "[CRON-OUTPUT-WATCHDOG] $($failures.Count) cron run(s) FAILED",
