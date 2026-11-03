@@ -152,8 +152,18 @@ function Invoke-Gh {
         return Invoke-RestMethod -Uri "https://api.github.com/$Path" -Headers $script:GhHeaders -TimeoutSec 20 -ErrorAction Stop
     }
     catch {
-        # Surface GitHub's own explanation when there is one (rate limit / abuse
-        # detection 403s carry a JSON message the bare exception hides).
+        # 2026-11-03: a 404 here is almost always a bad candidate reference, not
+        # an outage — measured 14:37Z, the report regex caught "#2159" from prose
+        # ("(fixes #2159)", an ISSUE number) and pulls/2159/reviews 404'd as a
+        # WARN. Callers treat $null as "skip this candidate", so log 404s at INFO
+        # and keep every other failure (403 rate limit, timeouts) at WARN with
+        # GitHub's own explanation when there is one.
+        $code = 0
+        try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+        if ($code -eq 404) {
+            Write-Log "GitHub API 404 ($Path) — reference is not a pull request (issue number caught by the report scan?); skipping this candidate." "INFO"
+            return $null
+        }
         $detail = ""
         try {
             $resp = $_.Exception.Response
@@ -252,19 +262,33 @@ function Get-RestMarkedReviewsByRepo {
     # ~all its reviews there. This scan is the per-repo floor.
     $result = @{ Latest = $null; ByRepo = @{} }
     if (-not (Test-Path $PrReviewReportsDir)) { return $result }
+    # 2026-11-03 17:53Z: was 3. An abort WAVE measured 5 consecutive reports
+    # (09:12->10:32Z EMPTY-RESPONSE) — with 3 scanned, every report in the <3h
+    # window was an abort and the cross-check went blind while reviews were
+    # landing (11:07Z read "3.3h" 5 min after 3 real reviews: they belonged to
+    # a run still in flight, so NO report named them yet — the only fresher
+    # evidence is the next tick).
     $reports = Get-ChildItem $PrReviewReportsDir -Filter *.md -ErrorAction SilentlyContinue |
-        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 3
+        Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 6
     if ($null -eq $reports) { return $result }
     # 2026-10-24 22:37Z: the NEWEST report can be an abort whose Response names no
     # PR, leaving the cross-check with no candidates while reviews exist — try the
     # next reports (same < 3 h freshness rule) until one yields candidates.
     $candidates = @()
+    $aborts = 0
     foreach ($report in @($reports)) {
         if (($now - $report.LastWriteTimeUtc).TotalHours -gt 3) { continue }
         $raw = Get-Content $report.FullName -Raw
         $idx = $raw.LastIndexOf('## Response')
         if ($idx -lt 0) { continue }
-        foreach ($m in [regex]::Matches($raw.Substring($idx), '#(\d{4,6})([^\r\n]{0,60})')) {
+        $responseText = $raw.Substring($idx)
+        # An abort report's whole Response is the framework's apology text — it
+        # names no PR. Count them so the blind window is legible in the log
+        # instead of reading as "no candidates, no reason".
+        if ($responseText -match 'failed: missing required parameters:' -or
+            $responseText -match 'Stream ended without a finish_reason' -or
+            $responseText -match 'model returned an empty response') { $aborts++ }
+        foreach ($m in [regex]::Matches($responseText, '#(\d{4,6})([^\r\n]{0,60})')) {
             $pr = $m.Groups[1].Value
             $tail = $m.Groups[2].Value
             $repo = "jsboige/CoursIA"
@@ -275,6 +299,13 @@ function Get-RestMarkedReviewsByRepo {
             if ($candidates -notcontains $key) { $candidates += $key }
         }
         if ($candidates.Count -gt 0) { break }
+    }
+    if ($candidates.Count -eq 0 -and $aborts -gt 0) {
+        # Measured 2026-11-03 11:07Z: 3 aborts, 0 candidates, age fell back to a
+        # stale LastReviewSeen while 3 fresh reviews existed. The blind window is
+        # real and transient (next tick sees the in-flight run's report) — but it
+        # must be NAMED, not read as "no candidates" with no reason.
+        Write-Log "REST cross-check blind window: the $aborts newest pr-review report(s) <3h are aborts naming no PR — reviews from a run still in flight stay invisible until its report lands (age falls back to previous tick's floor)." "WARN"
     }
     # Cap at 6 PRs per tick (was 2): covers a full run's batch while staying far
     # from any rate budget at the 30-min tick.
