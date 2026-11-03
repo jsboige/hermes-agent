@@ -417,6 +417,14 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       dans `docker-compose.ai-01.yml`, commentaire expliquant) : un `up -d` futur ne le relancera plus. Le gateway n'a
       pas souffert (mitigation et jobs intacts à travers les 244 passes). Le conteneur stoppé reste en place (Exited).
       Fire 13:53Z : toujours Exited (137) 3 h, compose default = gateway seul — fence tient.
+- [ ] **Phase D roo-state-manager — le gel G: touchera NOS backups (inscrit fire 23:34Z 03/11)** : calendrier flotte
+      (global 19:08Z) : merge ms#1643 04/11 12:00Z, **rebuild flotte 04/11 18:00Z**, gel G: mesuré 05/11 18:00Z.
+      Le déclencheur `Hermes-GDrive-Backup` écrit sur `G:\Mon Drive\...` — après le gel, G: peut disparaître/figer.
+      (1) Aux fires du 04/11 après 18:00Z : vérifier le bus MCP du bot (ponts 3/3 + un tool call réel, pas seulement
+      les logs). (2) Dès que roo-extensions annonce la nouvelle cible du store : **repointer le script
+      `hermes-gdrive-backup-daily.ps1` et re-vérifier le tir N+1** (leçon 26/10) — ne PAS supprimer la tâche avant la
+      bascule ; le mandat user « tout sur GDrive » (23/10) devient « tout hors D: » (30/10) si G: cède.
+      Condition de reprise : annonce roo-extensions (nouvelle cible) ou constat G: HS au tir 01:53Z.
 - [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
       hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
       `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
