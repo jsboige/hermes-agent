@@ -137,6 +137,14 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 6. **Bus RooSync (capabilité)** : dernier write du BOT (`myia-ai-01|hermes-agent` hors posts harnais
    `[STATUS 3h]`) sur `workspace-cluster-coordination`. Lire ce que disent les bots (Hermes + NanoClaw) :
    regex `bus down|undelivered|fallback|write failed|no dashboard|MCP.*down|recovery|downgrad`.
+   **PIÈGE DESTRUCTIF (`action:"delete"` = suppresseur de DASHBOARD, pas éditeur de message) — mesuré 03/11 05:03Z** :
+   la lane notebook-audit a voulu retirer un message mal routé avec `delete` + `messageId` et a **détruit
+   `workspace-roo-extensions`** (13 messages, intercom 22,5 Ko) ; il n'existe AUCUNE action de retrait d'un message
+   isolé. Conséquences : status antérieur perdu, 3 messages postérieurs à la dernière archive perdus, 8 messages
+   d'auteurs tiers republiés sous `myia-ai-01:roo-extensions` avec bandeau `[RESTORÉ …]` (garde #4135 : on ne
+   réécrit pas sous l'identité d'autrui). **Un message mal routé se corrige par un post de correction, jamais par
+   un delete.** Au check 6, guetter aussi les dashboards portant `[RESTORÉ` / « reconstruit » : c'est le seul
+   signal qu'une perte a eu lieu, et la récupération appartient au propriétaire du store (archive + PG), pas au siège.
 7. **Ressources** (ai-01 = machine la plus chargée de la flotte) : RAM libre, `docker stats --no-stream hermes`.
 
 ## Mise en place (avancer d'un cran à chaque fire, puis le consigner)
