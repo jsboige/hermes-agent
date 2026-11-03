@@ -40,8 +40,11 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 2. **Gateway vivant** : `docker exec hermes ps -eo pid,user,args | grep -E "^ *[0-9]+ hermes .*sys.argv\[0\]='hermes'"`
    (le gateway est un python avec `argv[0]='hermes'` ; `pgrep -f "gateway run"` ne vise que le wrapper s6
    root). NE PAS afficher la sortie brute de `ps` : les args `mcp-remote` portent le bearer MCP.
-3. **Crons bot** : `hermes cron list` (via la commande conteneur) + derniers rapports
-   `C:\Users\MYIA\.hermes\cron\output\<job-id>\*.md`. Pour chaque job actif : dernier run < 2 périodes,
+3. **Crons bot** : les **rapports** `C:\Users\MYIA\.hermes\cron\output\<job-id>\*.md` sont l'instrument PRIMAIRE et
+   suffisant (liste des jobs actifs, horodatage, contenu, queue classable). `hermes cron list` n'est PAS nécessaire —
+   mesuré 2 fois (03/11 05:53Z et 17:53Z) : la commande **pend > 120 s** dans le conteneur et doit être tuée, ce qui
+   coûte une tâche de fond pour une information déjà présente dans les rapports et `jobs.json`. Ne l'appeler que si
+   un job manque à l'appel dans `jobs.json` (et alors en tâche de fond, jamais en premier plan). Pour chaque job actif : dernier run < 2 périodes,
    `Response` non réduite au marqueur `Tool call "tool_call" failed: missing required parameters`
    (échec silencieux enregistré `ok` — corpus = `cron/output/**`, PAS les logs ni les transcripts).
    Classer TOUS les rapports depuis le fire précédent, pas seulement le dernier de chaque job : deux autres
