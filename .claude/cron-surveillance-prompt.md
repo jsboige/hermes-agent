@@ -66,6 +66,11 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    croiser d'abord avec le hub (cascade, `[Failover]`) — c'est l'amont qui forme ces réponses. Un `RUN-ERROR`
    « HTTP 400 … Cannot reach GLM Coding at `https://api.z.ai` » vient du HUB (le bot appelle bien `192.168.0.50:3000`) :
    le hub n'a pas joint z.ai et répond 400, que le client ne rejoue pas (1er cas 15/10 23:06Z, flap hub 23:08Z).
+   **Même classe, 3ᵉ étage de la cascade (mesuré 04/11 01:53Z, audit RUN-ERROR)** :
+   `HTTP 400: Cannot reach api.deepseek.com for Deepseek. This is a network problem on your machine — check your internet
+   connection, VPN, or DNS resolver … not Deepseek.` — le texte désigne la machine du **HUB**, pas ce siège : Kimi retiré
+   (03/11 00:26Z), `deepseek-flash` est le dernier étage du rôle sonnet. Ne pas chercher une panne réseau locale ;
+   classer « cascade hub » et croiser avec les `[Failover]` du hub avant d'incriminer le bot.
    **QUOTA 5 h DU RÔLE `sonnet` (mesuré 27/10, distinct des deux précédents)** : la signature est
    `HTTP 429 … anthropic.RateLimitError: Usage limit reached for 5 hour. Your limit will reset at <horodatage>`
    — 28 occurrences entre 07:15Z et 17:47Z, avec **7 runs sur 14 en échec (50 %)** sur la fenêtre 14:40→17:53Z,
