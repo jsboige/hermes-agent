@@ -422,14 +422,26 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       dans `docker-compose.ai-01.yml`, commentaire expliquant) : un `up -d` futur ne le relancera plus. Le gateway n'a
       pas souffert (mitigation et jobs intacts à travers les 244 passes). Le conteneur stoppé reste en place (Exited).
       Fire 13:53Z : toujours Exited (137) 3 h, compose default = gateway seul — fence tient.
-- [ ] **Phase D roo-state-manager — le gel G: touchera NOS backups (inscrit fire 23:34Z 03/11)** : calendrier flotte
-      (global 19:08Z) : merge ms#1643 04/11 12:00Z, **rebuild flotte 04/11 18:00Z**, gel G: mesuré 05/11 18:00Z.
-      Le déclencheur `Hermes-GDrive-Backup` écrit sur `G:\Mon Drive\...` — après le gel, G: peut disparaître/figer.
+- [ ] **Phase D roo-state-manager — le gel G: touchera NOS backups (inscrit fire 23:34Z 03/11 ; DATES REPORTÉES 05/11 18:03Z)** :
+      calendrier flotte révisé (global 18:03Z) : **« Bascule PG #4131 : date 05/11 18:00Z NON TENUE »** — messages et
+      registre gelés > 46 h, inventories actif ; nouvelle séquence : **merge 07/11 12:00Z, rebuild flotte 07/11 18:00Z,
+      mesure 08/11 18:00Z**. Le déclencheur `Hermes-GDrive-Backup` écrit sur `G:\Mon Drive\...` — après le gel, G: peut
+      disparaître/figer. **Le 05/11 à 20:50Z G: était toujours inscriptible (sonde OK, 580 Go)** : le tir du 06/11 01:53Z
+      n'est donc plus « le premier après le gel », le premier candidat est désormais **09/11 01:53Z**.
       (1) Aux fires du 04/11 après 18:00Z : vérifier le bus MCP du bot (ponts 3/3 + un tool call réel, pas seulement
       les logs). (2) Dès que roo-extensions annonce la nouvelle cible du store : **repointer le script
       `hermes-gdrive-backup-daily.ps1` et re-vérifier le tir N+1** (leçon 26/10) — ne PAS supprimer la tâche avant la
       bascule ; le mandat user « tout sur GDrive » (23/10) devient « tout hors D: » (30/10) si G: cède.
       Condition de reprise : annonce roo-extensions (nouvelle cible) ou constat G: HS au tir 01:53Z.
+- [x] **Élagage du volume bot (Q4, GO user 05/11 ~15:05Z) + garde d'âge posée** : ~73 Go rendus le 05/11 17:24Z
+      (`cache/scratch` 73→7,2 Go par manifestes nominatifs et règle > 6 h, `audit-17073` 4,2→2,7, `.cache`/`.npm` → 0),
+      toolchains gardés (`home/.elan`, `home/.local`, `.local`, `.solcx`, `.pytensor`), `state.db` jamais touché.
+      **La croissance est structurelle** : `cache/scratch` est repassé à 12,5 Go en 3,5 h ⇒ garde
+      `hermes-cache-prune.ps1` (commit `458eb9f28d`) + tâche hôte **`Hermes-Cache-Pruner`** quotidienne 02:23 locale
+      (non élevée, VBS caché, dry-run par défaut, `-Apply` dans le lanceur, budget 40 Go, manifeste avant suppression).
+      **À chaque fire** : `Get-ScheduledTaskInfo Hermes-Cache-Pruner` `LastTaskResult=0x0` ET la dernière ligne de
+      `roosync-cluster/logs/cache-prune.log` doit dire `OK - rien à élaguer` ou `deleted_entries=N …`. Le plafond de
+      volume à ne pas dépasser : red flag au-delà de ~30 Go (`du -sm /opt/data/cache/scratch`).
 - [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
       hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
       `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
