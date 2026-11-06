@@ -39,7 +39,10 @@ if (-not $DestReady) {
 
 # --- essentials (tar.exe ships with Windows 10+) ---
 $Ess = Join-Path $Dest "hermes-essentials-$Stamp.tar.gz"
-& tar.exe -czf $Ess -C $Volume memories SOUL.md skills config.yaml cron/jobs.json .env.secrets .env
+# hermes-ops (2026-11-06): holds guard/attribution.key — the HMAC key signing
+# review attribution markers (roo-extensions #3476). Losing it makes every past
+# signature unverifiable; it is 65 bytes.
+& tar.exe -czf $Ess -C $Volume memories SOUL.md skills config.yaml cron/jobs.json .env.secrets .env hermes-ops
 # An exit code is not proof of product: check the archive itself (a 0-byte tar.gz
 # can carry exit 1 — or worse, exit 0). Remove the empty artefact, then fail loudly.
 $EssLen = if (Test-Path -LiteralPath $Ess) { (Get-Item -LiteralPath $Ess).Length } else { -1 }
