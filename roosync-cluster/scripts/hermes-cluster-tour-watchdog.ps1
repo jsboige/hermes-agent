@@ -77,6 +77,19 @@
         read-only call on the bus route; posts nothing, alerts nothing, writes no
         state.
 
+    ELEVENTH blindness, measured 2026-11-06 on T#207 (false MISSING): the
+    verdict instrument is the G: FILE MIRROR while the store is cloud-first
+    (#4434) — an append lands in PG with the GDrive write skipped or lagging
+    (live proof the same day: a corrective REPLY answered gdriveSkipped:true and
+    stayed absent from the mirror for 10+ min while the bus served it). The
+    12:49Z tick judged T#207 MISSING off a mirror that did not yet carry the
+    12:25:40Z post; the 13:19Z tick found it — the WARN + Telegram were false.
+    Guard: before any MISSING verdict, a cross-read through the BUS (PG-backed,
+    the transport this organ posts its own WARN through) must agree the post is
+    absent. A bus confirmation flips the verdict to OK ("mirror stale"); a bus
+    failure keeps the mirror verdict — the guard degrades open, it never blocks
+    the organ. Mirror-only evidence can no longer declare a tour lost.
+
     Telegram alert goes to the same review chat as hermes-review-watchdog.ps1.
     A cooldown (state file) prevents spam; only a DELIVERED alert starts it.
     Every run logs to cluster-tour-watchdog.log. Dates follow the review-watchdog
@@ -426,6 +439,38 @@ function Publish-GlobalWarn {
     return ($null -ne $result -and $result -match 'success\\{0,2}"\s*:\s*true')
 }
 
+# ELEVENTH-blindness guard (2026-11-06, T#207): same title matching as
+# Get-LastClusterHealthTimestamp, but reading through the BUS (PG-backed) —
+# the G: mirror can lag the cloud-first store. Returns the last [CLUSTER-HEALTH]
+# intercom timestamp the BUS serves, or $null when the bus is unreachable/blank
+# (caller keeps the mirror verdict in that case — degrade open, never block).
+function Get-LastClusterHealthTimestampFromBus {
+    $raw = Invoke-RsmDashboard @{ action = 'read'; type = 'global'; section = 'intercom' }
+    if (-not $raw) { Write-Log "bus cross-read unavailable (no route answered)" "WARN"; return $null }
+    try {
+        $j = $raw | ConvertFrom-Json
+        $texts = @()
+        if ($j.result -and $j.result.content) {
+            foreach ($c in @($j.result.content)) { if ($c.type -eq 'text' -and $c.text) { $texts += "$($c.text)" } }
+        }
+        if (-not $texts.Count) { Write-Log "bus cross-read: no text content in response" "WARN"; return $null }
+        $lastTs = $null
+        $pattern = '(?m)^### \[([0-9T:\-\.]+Z)\][^\r\n]*\r?\n([\s\S]*?)(?=^### \[|\z)'
+        foreach ($text in $texts) {
+            foreach ($m in [regex]::Matches($text, $pattern)) {
+                if ($m.Groups[2].Value -match "(?m)^(?:\\?#){0,2}\s*\[CLUSTER-HEALTH\](?:\[[^\]]+\])*\s+T#\d+") {
+                    $t = ConvertTo-UtcDateTime $m.Groups[1].Value
+                    if ($null -ne $t -and ($null -eq $lastTs -or $t -gt $lastTs)) { $lastTs = $t }
+                }
+            }
+        }
+        return $lastTs
+    } catch {
+        Write-Log "bus cross-read parse failed: $($_.Exception.Message)" "WARN"
+        return $null
+    }
+}
+
 # --- main ---
 
 $now = [datetime]::UtcNow
@@ -464,9 +509,21 @@ if ($isNewFire -and $fireAgeMin -ge $PostMarginMinutes) {
         $verdict = "OK"
         $detail = "global [CLUSTER-HEALTH] @ $($lastHealth.ToString('o',$Invariant)) >= fire @ $($fireAnchor.ToString('o',$Invariant))"
     } else {
-        $verdict = "MISSING"
-        $lastHealthStr = if ($lastHealth) { $lastHealth.ToString("o", $Invariant) } else { "never" }
-        $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) -> NO global [CLUSTER-HEALTH] (last seen $lastHealthStr)"
+        # 11th-blindness guard (2026-11-06, T#207 false MISSING): the G: mirror
+        # can lag the cloud-first store — cross-read the BUS before declaring a
+        # tour lost. Confirmation flips to OK; a bus failure keeps the mirror
+        # verdict (degrade open, never block the organ).
+        $busHealth = Get-LastClusterHealthTimestampFromBus
+        if ($null -ne $busHealth -and $busHealth -ge $fireAnchor.AddMinutes(-5)) {
+            $verdict = "OK"
+            $detail = "bus cross-read found [CLUSTER-HEALTH] @ $($busHealth.ToString('o',$Invariant)) — G: mirror stale at this tick (11th-blindness guard)"
+            Write-Log "MISSING downgraded to OK by bus cross-read (mirror stale): last_health_bus=$($busHealth.ToString('o',$Invariant))" "INFO"
+        } else {
+            $verdict = "MISSING"
+            $lastHealthStr = if ($lastHealth) { $lastHealth.ToString("o", $Invariant) } else { "never" }
+            $busHealthStr = if ($busHealth) { $busHealth.ToString("o", $Invariant) } else { "unavailable" }
+            $detail = "fire @ $($fireAnchor.ToString('o',$Invariant)) -> NO global [CLUSTER-HEALTH] (last seen $lastHealthStr, bus $busHealthStr)"
+        }
     }
 } elseif ($isNewFire -and $fireAgeMin -lt $PostMarginMinutes) {
     $verdict = "PENDING"
