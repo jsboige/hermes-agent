@@ -45,6 +45,19 @@
                      (09:12Z pr-review, ~184703 tokens). Root cause upstream
                      (ai-01 LLM primary / provider wave), lanes self-recovered
                      at their next slot — the signal is the RATE, not the event.
+      TRUNCATED-REASONING — the run's final response is the model's mid-work
+                     thinking, cut mid-thought, with no bilan, no terminal
+                     marker and no error. Measured 2026-11-06 09:37:25Z
+                     (pr-review, 1144 chars: "Vérifions d'abord si le top …"):
+                     it posted ZERO reviews while this organ's log read "OK" at
+                     09:41, 10:11 and 10:41Z — every other signal was blind
+                     (above MinChars, no apology marker, no `## Error`).
+                     Scoped to pr-review: its prompt makes the "N/N reviews
+                     posted" bilan line mandatory, and that line is the
+                     discriminator (48/50 measured reports carry it, the other
+                     two say "reviews postées"/"publiées"). A generic
+                     "no terminal marker" predicate was tried first and produced
+                     4 false positives / 5 hits on real healthy reports.
 
     IMPORTANT — THREAD-FAIL does NOT mean the run's work was lost. The abort can
     land anywhere in the run, and the two measured cases differ:
@@ -133,6 +146,22 @@ $RunErrorPattern = '(?ms)^## Error\s*$.*?Traceback \(most recent call last\)'
 # so a real report listing PR links on their own line cannot match.
 $SearchHitPattern = '(?m)^\d+\. \*\*.+\*\*[ \t]*\r?\n[ \t]+https?://(?!github\.com)\S+'
 $SearchDumpMinHits = 3
+# Final response that is a TRUNCATED REASONING TAIL (measured 2026-11-06 09:37Z,
+# pr-review): the model's mid-work thinking — "Tier-âgé : … Vérifions d'abord si
+# le top #24116/#24534 ont des reviews … (non-clusterManager)." — became the run's
+# FINAL RESPONSE. 1144 chars (above MinChars), no `## Error`, no apology marker,
+# no [SILENT]: every existing signal read it as a normal report, and the organ
+# logged "OK" at 09:41/10:11/10:41Z while the run had posted ZERO reviews.
+# SCOPE = pr-review only, because its prompt makes a bilan line mandatory and that
+# line is the discriminator. A generic "no terminal marker at all" predicate was
+# built first and MEASURED against the retained corpus: 4 false positives out of
+# 5 hits (audit c439 ends "Ledger 862/862, pop 862, drift 0" and a real ping with
+# an [ASK] carry none of the assumed markers). The verb set comes from 50 measured
+# pr-review reports: 48 say posted/postées/publiées; the 3rd non-conforming one
+# (2026-11-05 01:38) says "reviews postées" — hence the French forms.
+# Extending to another lane requires measuring THAT lane's contract first.
+$PrReviewContractPattern = '(?i)\d+\s*/\s*\d+\s+reviews?\s+(?:posted|post[ée]es?|publi[ée]es?|[ée]mises?|envoy[ée]es?)'
+$TruncatedMinChars = 300
 
 # --- helpers ---
 
@@ -277,6 +306,7 @@ foreach ($dir in (Get-ChildItem -Path $outputRoot -Directory -ErrorAction Silent
                 # "nothing to report" (ping-intercom's normal idle cycle), not a failure.
                 $silent = $body -match '## Response\s*\[SILENT\]\s*$'
                 if ($chars -lt $MinChars -and -not $silent) { $reason = "SHORT-OUTPUT" }
+                elseif ($chars -ge $TruncatedMinChars -and -not $silent -and $label -match 'pr-review' -and $response -notmatch $PrReviewContractPattern) { $reason = "TRUNCATED-REASONING" }
             }
         }
 
@@ -319,6 +349,7 @@ else {
         'SEARCH-DUMP'  = "SEARCH-DUMP (recorded ok): the run ended on raw web-search results instead of its report."
         'RUN-ERROR'    = "RUN-ERROR: the scheduler logged a traceback (see the report's Error section)."
         'EMPTY-RESPONSE' = "EMPTY-RESPONSE (recorded ok): the model returned an empty completion and the framework's apology became the report (upstream/provider wave; check the lane's next slot for recovery)."
+        'TRUNCATED-REASONING' = "TRUNCATED-REASONING (recorded ok): the run's final response is a mid-work reasoning tail with no bilan, no terminal marker and no error — the work it was doing was lost (read the response to see how far it got)."
     }
     $msg = @(
         "[CRON-OUTPUT-WATCHDOG] $($failures.Count) cron run(s) FAILED",
