@@ -51,6 +51,12 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    formes d'échec existent depuis le 15/10 — fin sur résultats bruts de recherche web (`N. **titre**` + URL
    indentée, enregistrée `ok`, aucun bilan ni STATUS) et section `## Error` avec traceback (`IndexError` du hub,
    boucle de répétition, filtre de contenu).
+   **Depuis le 06/11 une 3ᵉ forme est instrumentée : TRUNCATED-REASONING** — la réponse finale est la
+   queue du raisonnement de travail, coupée net (« Vérifions d'abord si le top … »), 1144 c. mesurés
+   au run pr-review 09:37:25Z, sans bilan, sans `## Error`, sans `[SILENT]` : le watchdog lisait « OK »
+   pendant que le run avait posté ZÉRO review. Signal ajouté au cron-output-watchdog (scope pr-review,
+   prédicat = absence de la ligne de bilan `N/N reviews posted/postées/publiées`, dry-run 1 détection
+   / 0 faux positif sur 26 h) ; au fire, un rapport pr-review long sans cette ligne = mort.
    **Dater un run = le NOM du fichier (UTC), JAMAIS `LastWriteTime` (heure LOCALE, UTC+1) — mesuré 29/10.** Le
    nom `2026-10-29_00-06-07.md` = fin de run à 00:06:07Z ; `LastWriteTime` lisait 01:06. Sélectionner la fenêtre
    en comparant les NOMS au fire précédent, pas `-newermt`/`LastWriteTime` : en triant sur le mtime on attribue
