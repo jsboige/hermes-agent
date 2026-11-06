@@ -96,25 +96,16 @@ S_BEFORE=$(size /opt/data/cache/scratch)
 A_BEFORE=$(size /opt/data/audit-17073)
 echo "scratch_before_mb=$S_BEFORE audit_before_mb=$A_BEFORE"
 echo "refs main=$REF_MAIN kernel=$REF_KERN audit=$REF_AUD"
-# scratch : non-hermes_*
-cd /opt/data/cache/scratch 2>/dev/null && for e in * .[!.]*; do
-  [ -e "$e" ] || continue
-  case "$e" in hermes_*) continue;; esac
-  [ "$e" -nt "$REF_MAIN" ] && continue
-  echo "/opt/data/cache/scratch/$e" >> "$MAN"
-done
+# Sélection par AGE via GNU find ! -newermt. CORRECTIF 06/11 : la 1re version
+# testait `[ "$e" -nt "$REF_MAIN" ]` où REF_MAIN est une DATE-CHAÎNE : `-nt`
+# la traite comme un CHEMIN inexistant, et « file1 -nt file2 » est VRAI quand
+# file2 n'existe pas ⇒ toute entrée était skipée, manifeste toujours vide,
+# « OK - rien à élaguer » mensonger par construction (garde inerte).
+find /opt/data/cache/scratch -maxdepth 1 -mindepth 1 ! -name 'hermes_*' ! -newermt "$REF_MAIN" -printf '/opt/data/cache/scratch/%f\n' >> "$MAN" 2>/dev/null
 # scratch : entités hermes_* (kernels/sockets)
-for e in hermes_*; do
-  [ -e "$e" ] || continue
-  [ "$e" -nt "$REF_KERN" ] && continue
-  echo "/opt/data/cache/scratch/$e" >> "$MAN"
-done
+find /opt/data/cache/scratch -maxdepth 1 -mindepth 1 -name 'hermes_*' ! -newermt "$REF_KERN" -printf '/opt/data/cache/scratch/%f\n' >> "$MAN" 2>/dev/null
 # audit
-cd /opt/data/audit-17073 2>/dev/null && for e in * .[!.]*; do
-  [ -e "$e" ] || continue
-  [ "$e" -nt "$REF_AUD" ] && continue
-  echo "/opt/data/audit-17073/$e" >> "$MAN"
-done
+find /opt/data/audit-17073 -maxdepth 1 -mindepth 1 ! -newermt "$REF_AUD" -printf '/opt/data/audit-17073/%f\n' >> "$MAN" 2>/dev/null
 echo "manifest=$MAN entries=$(wc -l < "$MAN")"
 '@
 
@@ -151,23 +142,28 @@ if (-not $Apply) {
 }
 
 # --- 3. Suppression bornée ---------------------------------------------------
-$del = @"
+# CORRECTIF 06/11 : ce bloc était un here-string DOUBLE-QUOTÉ avec des
+# échappements bash (`\$`) — PowerShell n'ignore pas `\$` et évaluait
+# `$(du …)` CÔTÉ HÔTE (« du n'est pas reconnu ») : le chemin -Apply n'avait
+# jamais été exécuté, donc jamais testé. Single-quoted + placeholders.
+$delTemplate = @'
 set -u
-MAN=$manifestPath
-BUDGET=$MaxDeleteGB
+MAN=__MANIFEST__
+BUDGET=__BUDGET__
 TOT=0; N=0; STOPPED=0
 while IFS= read -r p; do
-  [ -e "\$p" ] || continue
-  SZ=\$(du -sm "\$p" 2>/dev/null | cut -f1); SZ=\${SZ:-0}
-  if [ \$((TOT + SZ)) -gt \$((BUDGET*1024)) ]; then STOPPED=1; break; fi
-  rm -rf -- "\$p" && { TOT=\$((TOT + SZ)); N=\$((N + 1)); }
-done < "\$MAN"
-echo "deleted_entries=\$N deleted_mb=\$TOT budget_hit=\$STOPPED"
-S_AFTER=\$(du -sm /opt/data/cache/scratch 2>/dev/null | cut -f1)
-A_AFTER=\$(du -sm /opt/data/audit-17073 2>/dev/null | cut -f1)
-echo "scratch_after_mb=\$S_AFTER audit_after_mb=\$A_AFTER"
-df -m /opt/data | tail -1 | awk '{print "volume_used_mb="\$3" volume_free_mb="\$4}'
-"@
+  [ -e "$p" ] || continue
+  SZ=$(du -sm "$p" 2>/dev/null | cut -f1); SZ=${SZ:-0}
+  if [ $((TOT + SZ)) -gt $((BUDGET*1024)) ]; then STOPPED=1; break; fi
+  rm -rf -- "$p" && { TOT=$((TOT + SZ)); N=$((N + 1)); }
+done < "$MAN"
+echo "deleted_entries=$N deleted_mb=$TOT budget_hit=$STOPPED"
+S_AFTER=$(du -sm /opt/data/cache/scratch 2>/dev/null | cut -f1)
+A_AFTER=$(du -sm /opt/data/audit-17073 2>/dev/null | cut -f1)
+echo "scratch_after_mb=$S_AFTER audit_after_mb=$A_AFTER"
+df -m /opt/data | tail -1 | awk '{print "volume_used_mb="$3" volume_free_mb="$4}'
+'@
+$del = $delTemplate.Replace('__MANIFEST__', $manifestPath).Replace('__BUDGET__', [string]$MaxDeleteGB)
 $delPath = Join-Path $env:TEMP ("hermes-cache-del-{0}.sh" -f ([guid]::NewGuid().ToString('N').Substring(0, 8)))
 [System.IO.File]::WriteAllText($delPath, ($del -replace "`r`n", "`n"), [System.Text.UTF8Encoding]::new($false))
 try {

@@ -433,15 +433,24 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
       `hermes-gdrive-backup-daily.ps1` et re-vérifier le tir N+1** (leçon 26/10) — ne PAS supprimer la tâche avant la
       bascule ; le mandat user « tout sur GDrive » (23/10) devient « tout hors D: » (30/10) si G: cède.
       Condition de reprise : annonce roo-extensions (nouvelle cible) ou constat G: HS au tir 01:53Z.
-- [x] **Élagage du volume bot (Q4, GO user 05/11 ~15:05Z) + garde d'âge posée** : ~73 Go rendus le 05/11 17:24Z
+- [x] **Élagage du volume bot (Q4, GO user 05/11 ~15:05Z) + garde d'âge CORRIGÉE 06/11 00:19Z** : ~73 Go rendus le 05/11 17:24Z
       (`cache/scratch` 73→7,2 Go par manifestes nominatifs et règle > 6 h, `audit-17073` 4,2→2,7, `.cache`/`.npm` → 0),
-      toolchains gardés (`home/.elan`, `home/.local`, `.local`, `.solcx`, `.pytensor`), `state.db` jamais touché.
-      **La croissance est structurelle** : `cache/scratch` est repassé à 12,5 Go en 3,5 h ⇒ garde
-      `hermes-cache-prune.ps1` (commit `458eb9f28d`) + tâche hôte **`Hermes-Cache-Pruner`** quotidienne 02:23 locale
-      (non élevée, VBS caché, dry-run par défaut, `-Apply` dans le lanceur, budget 40 Go, manifeste avant suppression).
-      **À chaque fire** : `Get-ScheduledTaskInfo Hermes-Cache-Pruner` `LastTaskResult=0x0` ET la dernière ligne de
-      `roosync-cluster/logs/cache-prune.log` doit dire `OK - rien à élaguer` ou `deleted_entries=N …`. Le plafond de
-      volume à ne pas dépasser : red flag au-delà de ~30 Go (`du -sm /opt/data/cache/scratch`).
+      puis **8,75 Go** le 06/11 00:19Z (175 entrées, scratch 26,2→17,5 Go). Toolchains gardés (`home/.elan`, `home/.local`,
+      `.local`, `.solcx`, `.pytensor`), `state.db` jamais touché. **La croissance est structurelle** : nuits Lean =
+      **+13,6 Go en 3 h** (labs mathlib des fournées) ; 7,2 → 12,5 → 26,2 Go mesuré le 05/11 soir.
+      **Deux bugs de la garde posée le 05/11, tous deux dans les chemins non testés par le dry-run d'hier** :
+      (1) le test d'âge `[ "$e" -nt "$REF" ]` comparait à un CHEMIN inexistant (la date-chaîne) — or « file1 -nt file2 »
+      est VRAI quand file2 n'existe pas ⇒ **manifeste toujours vide, garde inerte**, « OK - rien à élaguer » mensonger
+      par construction (prouvé : dry-run corrigé = 165 entrées là où l'ancien disait 0) ; remplacé par
+      `find ! -newermt` (GNU find, validé en conteneur). (2) le bloc de suppression était un here-string
+      PowerShell DOUBLE-QUOTÉ avec échappements bash (`\$`) : PowerShell évaluait `$(du …)` côté hôte (« du n'est pas
+      reconnu ») — le chemin `-Apply` n'avait jamais tourné ; converti en single-quoted + placeholders.
+      **Leçons** : un organe de garde doit être prouvé sur son chemin DÉFAVORABLE (montrer ≥ 1 entrée attrapée avant de
+      croire un « rien à signaler ») ; et tout here-string PowerShell contenant du shell est single-quoted, jamais
+      double-quoted. Lanceur VBS : `-Apply -MainHours 6` (la règle VALIDÉE par le user ; 48 h par défaut laisserait
+      ~2 jours de labs s'accumuler). **À chaque fire** : `Get-ScheduledTaskInfo Hermes-Cache-Pruner` `LastTaskResult=0x0`
+      ET la dernière ligne de `roosync-cluster/logs/cache-prune.log` = `deleted_entries=N` ou `OK - rien à élaguer`
+      (depuis le 06/11, ce verdict est une MESURE). Red flag : scratch > 30 Go après un tir (`du -sm`).
 - [x] Dashboard web Hermes : `dashboard.basic_auth` — **SANS OBJET sur ce siège (fire 04:52Z, 17/10)** : `docker port
       hermes` = vide (le gateway ne publie rien) et le service dashboard de `docker-compose.ai-01.yml` est publié
       `127.0.0.1:9119:9119` — jamais joignable hors de l'hôte. Le flag `--insecure` de sa commande ne s'expose qu'en
