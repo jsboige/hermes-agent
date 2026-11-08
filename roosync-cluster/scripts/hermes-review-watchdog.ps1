@@ -195,7 +195,13 @@ function Test-HermesBody {
     if (-not $s) { return $false }
     $lines = $s -split "`r?`n"
     $firstLine = $lines[0]
-    if ($firstLine.Contains("[NanoClaw")) { return $false }
+    # Anchored to a first line STARTING WITH the NanoClaw banner (spec validated
+    # 10/10 on live reviews, 2026-10-25): a Hermes first line that merely
+    # MENTIONS [NanoClaw mid-line (e.g. "## Review Hermes - prolonge l'analyse
+    # [NanoClaw] ci-dessous") is still Hermes — a Contains() exclusion here
+    # dropped exactly those (divergence caught by check-predicate-parity.py,
+    # 2026-11-08, reserve #2 of the PR#26 external review).
+    if ($firstLine.StartsWith('**[NanoClaw', [System.StringComparison]::Ordinal)) { return $false }
     # Fifth drift, measured 2026-11-02 08:00-08:36Z: the bot wrote its verdict as
     # a markdown HEADING — "## Verdict : CHANGES_REQUESTED — …", "## Verdict :
     # APPROVE — …" — in all five reviews of the 08:36 run and the three before

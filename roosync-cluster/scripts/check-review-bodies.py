@@ -51,7 +51,10 @@ HEAD_LAG_HOURS = 0.5
 
 
 def is_hermes_body(body, marker):
-    """Mirror of Test-HermesBody in hermes-review-watchdog.ps1 — keep in sync.
+    """Mirror of Test-HermesBody in hermes-review-watchdog.ps1 — parity is
+    enforced mechanically by check-predicate-parity.py (15-fixture corpus,
+    both predicates, exit 1 on divergence; first catch 2026-11-08: the PS
+    NanoClaw exclusion used Contains() where the spec anchors StartsWith).
 
     The bot drifted off the "[Hermes" header on 2026-10-25 (three live forms,
     measured 21:09-22:46Z): the contract header, "## Review Hermes (lane ...)"
