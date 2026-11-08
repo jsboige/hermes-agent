@@ -22,6 +22,14 @@ services:
     image: hermes-agent:ai-01
     container_name: hermes
     restart: unless-stopped
+    # Container bounds (user mandate 2026-11-07, chantier Maintenance#303):
+    # mem_limit == memswap_limit (no swap headroom) + pids_limit. Measured peak
+    # over 25 days: ~1.7 GiB steady, ~52 pids — the bounds give generous replay
+    # headroom (notebook re-executions run in-container) while capping a runaway
+    # before it can starve the host. Applied at the 2026-11-08 recreate.
+    mem_limit: 8g
+    memswap_limit: 8g
+    pids_limit: 1024
     volumes:
       - C:/Users/MYIA/.hermes:/opt/data
     environment:
