@@ -21,6 +21,12 @@
 
     Author: Hermes Agent workspace
     Issue: #2012 — MCP proxy SPOF: Qdrant drift cascades to total MCP loss
+
+    NOT REGISTERED on ai-01 (2026-10-16). The bot code no longer leaves a dead bridge: it parks the
+    server and self-probes every 300 s (tools/mcp_tool_server_run.py, _park). In that image, the Stage 1
+    pattern "hermes gateway run" matches no process (the gateway is a python with argv[0]='hermes'), so
+    this script would go straight to docker restart. Re-check both points before registering it anywhere.
+    See roosync-cluster/docs/SEAT-AI-01.md, Phase 2.
 #>
 
 param(

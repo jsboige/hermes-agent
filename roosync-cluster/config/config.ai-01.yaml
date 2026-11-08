@@ -1,0 +1,43 @@
+# Hermes Agent — Seat config seed for myia-ai-01
+# Copied to C:\Users\MYIA\.hermes\config.yaml (volume root = /opt/data) before first boot.
+# The restore script (hermes-restore-config.sh) then mutates the expanded config:
+#   - model.default -> claude-sonnet-4-6, provider -> claudish (hub po-2025:3000)
+#   - rebuilds auxiliary:/stt:/mcp_servers:/approvals:/memory: sections
+# Placement rule: the `telegram:` section must sit BEFORE `auxiliary:` — the restore
+# strips everything from the first auxiliary:/stt: line onward, so a section placed
+# after them would be deleted. Everything above `auxiliary:` survives.
+
+model:
+  default: "glm-5-turbo"
+  provider: "zai"
+
+compression:
+  enabled: true
+
+telegram:
+  reactions: true
+  require_mention: false
+  group_allow_from:
+    - '6541428999'
+  channel_prompts: {}
+
+display:
+  personality: "default"
+
+# Search mitigation LIFTED 2026-10-18: claudish fix #498 deployed (hub 443471b9, proof green
+# at Hermes's exact call form — coordinator DONE 11:31Z on workspace-claudish). The
+# `agent.disabled_toolsets: [search]` block is gone from this seed and from the volume config.
+
+auxiliary:
+  compression:
+    provider: "zai"
+    model: "glm-4.5-air"
+
+stt:
+  enabled: true
+  provider: "openai"
+  openai:
+    model: "whisper-1"
+    base_url: "https://whisper-api.myia.io/v1"
+
+mcp_servers: {}
