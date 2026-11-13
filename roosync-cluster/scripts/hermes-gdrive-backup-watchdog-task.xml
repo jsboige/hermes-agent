@@ -1,0 +1,54 @@
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <URI>\Hermes-GDrive-Backup</URI>
+    <Description>Sauvegarde quotidienne ciblee sur GDrive (mandat user 23/10 : "Absolument tout doit etre backupe sur GDrive", pas de tars de volume entier). Essentials chaque jour : memories, SOUL.md, skills, config.yaml, .env*, cron/jobs.json. Le dimanche (UTC) ajoute state.db compresse, l historique de conversations dont la perte a motive le mandat. Declencheur quotidien 01:53 locale, StartWhenAvailable (rattrapage si la machine dormait). Verifier le LOG roosync-cluster/logs/gdrive-backup.log ET l archive produite, pas seulement LastTaskResult : un code de sortie peut mentir dans les deux sens.</Description>
+    <Author>Hermes Agent workspace</Author>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <!-- TEMPLATE, not registerable as-is: Task Scheduler rejects an empty
+           UserId and this repo is a public fork, so no SID is versioned.
+           register-host-watchdog.ps1 -Watchdog gdrive-backup substitutes it
+           (dry run by default, -Apply to register). -->
+      <UserId>__USER_SID__</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT30M</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure>
+      <Count>2</Count>
+      <Interval>PT5M</Interval>
+    </RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+    </IdleSettings>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers>
+    <!-- CalendarTrigger/DaysInterval=1 = DAILY, NOT a repetition interval (a
+         30-minute <Repetition> would turn a daily backup into 48 runs/day).
+         The registrar rewrites the StartBoundary to the next 01:53 at install
+         time. StartWhenAvailable covers sleep.
+         Measured 2026-10-26: this template first shipped a bare <TimeTrigger>,
+         which fires ONCE and leaves NextRunTime=null after that single run -
+         the 01:53 run happened, tomorrow's would never have. DaysInterval is
+         what makes the trigger repeat; a TimeTrigger has none. -->
+    <CalendarTrigger>
+      <StartBoundary>2026-10-26T01:53:00+01:00</StartBoundary>
+      <ScheduleByDay>
+        <DaysInterval>1</DaysInterval>
+      </ScheduleByDay>
+    </CalendarTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>//B //Nologo "C:\ProgramData\claude-hidden-launchers\Hermes-GDrive-Backup.vbs"</Arguments>
+    </Exec>
+  </Actions>
+</Task>

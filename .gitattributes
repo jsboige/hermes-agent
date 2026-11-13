@@ -11,6 +11,10 @@ uv.lock text eol=lf
 Dockerfile  text eol=lf
 *.dockerfile text eol=lf
 docker/entrypoint.sh text eol=lf
+# Copied into the volume as the default .env on first boot, then SOURCED by
+# docker/main-wrapper.sh under `set -e`: a CRLF blank line is the command "\r"
+# -> "not found" -> gateway crash loop (Windows checkout, ai-01 seat 2026-10-14).
+.env.example text eol=lf
 
 # Every file git detects as text is stored with LF; the rules below also pin the checkout.
 * text=auto
