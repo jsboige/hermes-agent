@@ -45,7 +45,7 @@ except ImportError:  # pragma: no cover - dependency guidance only
 # rejects it. The two gates must see the same strings identically.
 NAME_RE = re.compile(r"^[a-z0-9_-]{1,64}\Z")
 SHA_RE = re.compile(r"^[0-9a-f]{40}\Z")
-TIERS = ("official", "community")
+TIERS = ("official", "verified", "community")
 CATEGORIES = ("desktop", "memory", "platform", "web", "tools", "voice", "automation", "models", "general")
 PLATFORMS = ("linux", "macos", "windows")
 CAPABILITY_KEYS = (
@@ -76,6 +76,7 @@ KNOWN_KEYS = {
     "title",
     "onboarding",
     "known_issues",
+    "attested_binaries",
 }
 # Cosmetic labels attached to the pin. ``version`` is never parsed; ``image`` and ``screenshots``
 # may only point at GitHub so the Desktop catalog browser and the docs site never fetch from
@@ -107,8 +108,18 @@ def _repo_host(repo: object) -> str:
     return (urlsplit(repo).hostname or "").lower() if isinstance(repo, str) else ""
 
 
+def _is_docs_url(value: str) -> bool:
+    """https with a real hostname; ``https://:443/x`` and ``https://user@/x`` pass the regex but carry no host."""
+    if not re.fullmatch(r"https://[^\s/?#]+\S*", value):
+        return False
+    try:
+        return bool(urlsplit(value).hostname)
+    except ValueError:
+        return False
+
+
 def _check_page_fields(data: dict, errors: list[str]) -> None:
-    """``screenshots`` and ``readme`` feed the entry's page at /docs/plugins/<name>; both optional (README on by default)."""
+    """``screenshots``, ``docs_url`` and ``readme`` feed the entry's page at /docs/plugins/<name>; all optional (README on by default)."""
     shots = data.get("screenshots")
     if shots is not None:
         if not isinstance(shots, list) or not all(isinstance(s, str) and _is_allowed_image_url(s) for s in shots):
@@ -117,6 +128,12 @@ def _check_page_fields(data: dict, errors: list[str]) -> None:
             )
         elif len(shots) > MAX_SCREENSHOTS:
             errors.append(f"screenshots lists {len(shots)} URLs; at most {MAX_SCREENSHOTS} are shown")
+    # The site renders docs_url as an <a href>; empty means "no docs link".
+    docs_url = data.get("docs_url")
+    if docs_url is not None and not (
+        isinstance(docs_url, str) and (not docs_url.strip() or _is_docs_url(docs_url.strip()))
+    ):
+        errors.append(f"docs_url {docs_url!r} must be an https:// URL (the docs site renders it as a link)")
     readme = data.get("readme")
     if readme is not None:
         if not isinstance(readme, bool):
@@ -236,7 +253,28 @@ def validate_entry(data: object) -> tuple[list[str], list[str]]:
             ):
                 errors.append(f"capabilities.{key} must be a list of strings")
 
+    # attested_binaries: relative paths to compiled files that carry a GitHub
+    # build-provenance attestation (README rule 17). The CI gate verifies the
+    # attestation; here we only shape-check the paths.
+    _check_attested_binaries(data.get("attested_binaries"), errors)
+
     return errors, warnings
+
+
+def _check_attested_binaries(attested: object, errors: list[str]) -> None:
+    """Shape-check the optional ``attested_binaries`` list of relative paths."""
+    if attested is None:
+        return
+    if not isinstance(attested, list) or not all(isinstance(p, str) for p in attested):
+        errors.append("attested_binaries must be a list of strings")
+        return
+    for p in attested:
+        if not re.fullmatch(r"[A-Za-z0-9._/-]+", p) or any(
+            seg in ("", ".", "..") for seg in p.split("/")
+        ):
+            errors.append(
+                f"attested_binaries path {p!r} must be a relative path without '.' or '..' segments"
+            )
 
 
 def validate_removed(data: object) -> tuple[list[str], list[str]]:
