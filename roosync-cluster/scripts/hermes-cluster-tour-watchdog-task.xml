@@ -1,0 +1,48 @@
+<Task version="1.3" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <URI>\Hermes-ClusterTour-Watchdog</URI>
+    <Description>Detecte un cluster-tour Hermes qui finit status=ok sans poster son [CLUSTER-HEALTH] sur le dashboard global (saut silencieux de l'ETAPE 3, issue jsboige/hermes-agent #3). Lit le lancement du tour dans jobs.json du volume hote et cherche le titre du tour dans global.md et dans les archives de condensation ecrites apres le lancement. S'il manque : un [WARN] poste sur global par le bus RooSync (idempotent par tour) et une alerte Telegram ; seule une alerte LIVREE arme le cooldown. Ne relance jamais le tour. Toutes les 30 min a :19/:49 (off-minutes, distincts des :07/:37 du watchdog review et des :11/:41 du watchdog cron-output).</Description>
+    <Author>Hermes Agent workspace</Author>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <!-- TEMPLATE, not a registerable file as-is. Task Scheduler rejects an empty
+           UserId, so no SID is versioned here either: this repo is a public fork and
+           the user SID is an identifier. Deploy with register-host-watchdog.ps1,
+           which resolves the current user's SID at run time and substitutes this token
+           (it also runs a dry run unless given -Apply). -->
+      <UserId>__USER_SID__</UserId>
+      <LogonType>InteractiveToken</LogonType>
+    </Principal>
+  </Principals>
+  <Settings>
+    <DisallowStartIfOnBatteries>true</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT10M</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <RestartOnFailure>
+      <Count>2</Count>
+      <Interval>PT5M</Interval>
+    </RestartOnFailure>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+    </IdleSettings>
+    <UseUnifiedSchedulingEngine>true</UseUnifiedSchedulingEngine>
+  </Settings>
+  <Triggers>
+    <TimeTrigger>
+      <StartBoundary>2026-10-16T13:19:00+02:00</StartBoundary>
+      <Repetition>
+        <Interval>PT30M</Interval>
+        <StopAtDurationEnd>true</StopAtDurationEnd>
+      </Repetition>
+    </TimeTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>wscript.exe</Command>
+      <Arguments>//B //Nologo "C:\ProgramData\claude-hidden-launchers\Hermes-ClusterTour-Watchdog.vbs"</Arguments>
+    </Exec>
+  </Actions>
+</Task>

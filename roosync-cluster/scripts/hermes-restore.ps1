@@ -42,9 +42,16 @@ docker cp $RestoreScript "${Container}:/opt/data/restore-config.sh"
 
 Write-Host "[3/4] Running restore script..."
 docker exec $Container bash /opt/data/restore-config.sh
+$RestoreExit = $LASTEXITCODE
 
 Write-Host "[4/4] Restarting container..."
 docker restart $Container
 
 Write-Host ""
+# A native non-zero exit does not trip $ErrorActionPreference: without this check an
+# aborted restore (verification block never reached) still printed "Done".
+if ($RestoreExit -ne 0) {
+    Write-Host "Restore script FAILED (exit $RestoreExit) - container restarted, but the verification block did not run." -ForegroundColor Red
+    exit $RestoreExit
+}
 Write-Host "Done. Hermes restored and restarted." -ForegroundColor Green
