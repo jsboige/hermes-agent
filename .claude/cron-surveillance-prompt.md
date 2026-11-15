@@ -26,7 +26,7 @@ Lis en parallèle :
 - le registre `memory/user-question-registry.md` (questions ouvertes au user)
 - l'**inbox RooSync du siège** : `roosync_messages(action: "inbox", status: "unread")` — ne traiter QUE les messages adressés à `myia-ai-01:hermes-agent` (les `[MENTION]` adressés à `myia-ai-01` seul appartiennent aux autres lanes : ne pas y toucher). Le bot ne peut PAS lire ces messages (derrière le proxy il sert l'inbox `myia-ai-01:roo-extensions`) : toute TASK de re-review / re-réponse adressée au siège se traite côté harnais (poster sous clusterManager-Myia via le `gh` du conteneur, `env -u GH_TOKEN`), puis répondre au DM et le marquer lu. Précédent 19/10 : TASK c2190, 3 re-reviews posées.
 
-Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, claudish), les réponses user, les TASK en attente dans l'inbox du siège.
+Identifie : le dernier `[STATUS 12h]`, les réponses à tes `[ASK]` (nanoclaw, claudish), les réponses user, les TASK en attente dans l'inbox du siège.
 
 ## Vérifications (concises, preuve par commande)
 
@@ -149,7 +149,7 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
    `load_gateway_config_for_runner()` dans le conteneur après `load_hermes_dotenv` et vérifier
    `platforms[TELEGRAM].enabled = True`.
 6. **Bus RooSync (capabilité)** : dernier write du BOT (`myia-ai-01|hermes-agent` hors posts harnais
-   `[STATUS 3h]`) sur `workspace-cluster-coordination`. Lire ce que disent les bots (Hermes + NanoClaw) :
+   `[STATUS 12h]`) sur `workspace-cluster-coordination`. Lire ce que disent les bots (Hermes + NanoClaw) :
    regex `bus down|undelivered|fallback|write failed|no dashboard|MCP.*down|recovery|downgrad`.
    **PIÈGE DESTRUCTIF (`action:"delete"` = suppresseur de DASHBOARD, pas éditeur de message) — mesuré 03/11 05:03Z** :
    la lane notebook-audit a voulu retirer un message mal routé avec `delete` + `messageId` et a **détruit
@@ -163,7 +163,7 @@ Identifie : le dernier `[STATUS 3h]`, les réponses à tes `[ASK]` (nanoclaw, cl
 
 ## Mise en place (avancer d'un cran à chaque fire, puis le consigner)
 
-État courant tenu dans le post `[STATUS 3h]` (cases à cocher). Prends le premier item actionnable non
+État courant tenu dans le post `[STATUS 12h]` (cases à cocher). Prends le premier item actionnable non
 bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise).
 
 - [x] **Audit des backups planifiés d'ai-01 (mandat user, fire 04:53Z 24/10)** — lecture seule, posté sur
@@ -467,7 +467,7 @@ bloqué ; ne force jamais un item bloqué (le noter avec sa condition de reprise
 `roosync_dashboard(action: "append", type: "workspace", workspace: "hermes-agent", author: {machineId: "myia-ai-01", workspace: "hermes-agent"}, tags: ["DONE"], content: ...)`
 
 ```
-[STATUS 3h — Hermes ai-01] <TIMESTAMP UTC>
+[STATUS 12h — Hermes ai-01] <TIMESTAMP UTC>
 Verdict : NOMINAL / WATCH / ALERT / SETUP.
 - Conteneur / gateway / ressources
 - Crons bot : <job → dernier run, échecs silencieux>
@@ -500,8 +500,8 @@ machine/Docker : la session survit, et son cron avec elle (incident 19/10 01:54Z
 créé un cron chacune sans lister d'abord → **3 jobs identiques**, triple fire à venir, corrigé).
 1. `CronList` → note le/les job ID(s) de surveillance existant(s). **Toujours, même sur une reprise.**
 2. `CronDelete` de CHACUN (y compris celui qui te fait fire maintenant).
-3. `CronCreate(cron: "23 */3 * * *", prompt: "/surveillance", recurring: true)`.
-4. `CronList` → confirme exactement 1, et note le **nouveau job ID** dans le post `[STATUS 3h]`.
+3. `CronCreate(cron: "23 */12 * * *", prompt: "/surveillance", recurring: true)` (cadence 12h — mandat user 15/11 « ralenti ton cron à 12h » ; 3h avant).
+4. `CronList` → confirme exactement 1, et note le **nouveau job ID** dans le post `[STATUS 12h]`.
 Il doit toujours y avoir **exactement 1** job de surveillance. **Signature du défaut : deux `/surveillance` à ~1 min
 d'écart** — ne PAS réexécuter le cycle, faire CronList et nettoyer les surnuméraires.
 
