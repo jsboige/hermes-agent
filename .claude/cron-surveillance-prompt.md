@@ -40,8 +40,15 @@ Identifie : le dernier `[STATUS 12h]`, les réponses à tes `[ASK]` (nanoclaw, c
 2. **Gateway vivant** : `docker exec hermes ps -eo pid,user,args | grep -E "^ *[0-9]+ hermes .*sys.argv\[0\]='hermes'"`
    (le gateway est un python avec `argv[0]='hermes'` ; `pgrep -f "gateway run"` ne vise que le wrapper s6
    root). NE PAS afficher la sortie brute de `ps` : les args `mcp-remote` portent le bearer MCP.
-3. **Crons bot** : les **rapports** `C:\Users\MYIA\.hermes\cron\output\<job-id>\*.md` sont l'instrument PRIMAIRE et
-   suffisant (liste des jobs actifs, horodatage, contenu, queue classable). `hermes cron list` n'est PAS nécessaire —
+3. **Crons bot** : l'instrument PRIMAIRE du **comptage** est `/opt/data/cron/executions.db` (SQLite dans le conteneur :
+   `job_id, status, started_at, finished_at, error` ; lecture `docker exec hermes python3 -c` + sqlite3). Il rend les
+   complétés / **morts** / **`running`** et distingue un slot **SKIPPÉ** (aucune ligne du tout — single-instance du
+   scheduler pendant un run actif, by-design) d'un run vraiment mort. Mesure fondatrice 15/11 : le run pr-review
+   09:05 a duré **87 min**, faisant sauter 09:35 et 10:05 sans aucune mort ; sur la même fenêtre un comptage par
+   rapports annonçait « 0 mort » alors qu'il y en avait **2** (429) + 1 running invisible aux rapports. Les
+   **rapports** `C:\Users\MYIA\.hermes\cron\output\<job-id>\*.md` restent l'instrument du **contenu** (horodatage,
+   queue classable, bilan `N/N`) mais ne classent PAS la mortalité : un run `failed` écrit un rapport avec
+   `## Error`, un run `running` n'a pas encore de rapport. `hermes cron list` n'est PAS nécessaire —
    mesuré 2 fois (03/11 05:53Z et 17:53Z) : la commande **pend > 120 s** dans le conteneur et doit être tuée, ce qui
    coûte une tâche de fond pour une information déjà présente dans les rapports et `jobs.json`. Ne l'appeler que si
    un job manque à l'appel dans `jobs.json` (et alors en tâche de fond, jamais en premier plan). Pour chaque job actif : dernier run < 2 périodes,
